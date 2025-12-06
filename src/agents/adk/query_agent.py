@@ -7,70 +7,71 @@ Copyright (c) 2025 Shrinivas Deshpande. All rights reserved.
 """
 
 from src.agents.adk.llm_client import LLMClient
-from src.agents.adk.tools import list_all_persons, get_family_tree
-from src.graph.person_store import PersonStore
-from src.graph.family_graph import FamilyGraph
-from src.graph.crm_store import CRMStore
+from src.graph.crm_store_v2 import CRMStoreV2
+from src.graph.family_registry import FamilyRegistry
 from src.graph.text_history import TextHistory
-from src.graph.vector_store import VectorStore
-from src.graph.enhanced_crm import EnhancedCRM
+from src.graph.family_graph import FamilyGraph
+from src.graph.person_store import PersonStore
 
 
 class QueryAgent:
     """Answer natural language questions about the family network."""
-    
-    SYSTEM = """You are a helpful family network assistant. Answer questions about family members, relationships, and contacts based on the provided data.
 
-Be concise and friendly. If you don't have enough information, say so.
+    SYSTEM = """You are a helpful family network assistant. Answer questions about family members, relationships, and contacts based ONLY on the provided data.
+
+CRITICAL RULES:
+- ONLY use information explicitly provided in the Family Database section
+- If a person is not listed, say "I don't have information about that person"
+- NEVER make up or infer information not in the database
+- If no data exists, say "The family database is empty"
+- Be concise and friendly
 
 When listing people, format nicely with bullet points.
 When describing relationships, be clear about who is related to whom.
 
-Use the text history and relevant context to provide comprehensive answers."""
-    
+Use the text history for additional context, but prioritize the structured database."""
+
     def __init__(self, provider: str = "ollama"):
         self.llm = LLMClient(provider=provider)
+        # Use CRM V2 stores for person profiles
+        self.crm_store = CRMStoreV2()
+        self.family_registry = FamilyRegistry()
+        self.text_history = TextHistory()
+        # Use legacy PersonStore + FamilyGraph for relationships
+        # (These are still used by GraphAgent for relationship storage)
         self.person_store = PersonStore()
         self.family_graph = FamilyGraph()
-        self.crm_store = CRMStore()
-        self.text_history = TextHistory()
-        self.enhanced_crm = EnhancedCRM()
-        # Vector store might not be available, so wrap in try/except
-        try:
-            self.vector_store = VectorStore()
-        except Exception:
-            self.vector_store = None
     
     def query(self, question: str) -> dict:
         """Answer a question about the family network."""
-        # Gather context
+        # Gather context from CRM V2 and GraphLite
         context = self._build_context()
-        
+
         if not context["persons"]:
             return {
                 "success": True,
                 "answer": "The family database is empty. Add some family members first using the Text Input or Record tabs."
             }
-        
+
         # Get relevant text history
         text_context = self._get_relevant_text_history(question)
-        
-        # Get vector search results
-        vector_results = self._vector_search(question)
-        
+
+        # Search for persons mentioned in question
+        person_mentions = self._search_relevant_persons(question)
+
         prompt = f"""Family Database:
 {self._format_context(context)}
 
 {text_context}
 
-{vector_results}
+{person_mentions}
 
 Question: {question}
 
-Provide a helpful answer based on the data above. Use the text history and search results to provide detailed context."""
-        
-        result = self.llm.generate(prompt, system=self.SYSTEM, temperature=0.3)
-        
+IMPORTANT: Base your answer ONLY on the data provided above. Do not make up or infer information."""
+
+        result = self.llm.generate(prompt, system=self.SYSTEM, temperature=0.1)
+
         if result["success"]:
             return {"success": True, "answer": result["text"]}
         else:
@@ -99,106 +100,185 @@ Provide a helpful answer based on the data above. Use the text history and searc
             return f"\nRelevant Text Input History:\n" + "\n".join([f"- {text}" for text in relevant_entries])
         return ""
     
-    def _vector_search(self, question: str, limit: int = 5) -> str:
-        """Search vector store for relevant persons."""
-        if not self.vector_store:
-            return ""
-        try:
-            results = self.vector_store.search(question, limit=limit)
-            if results:
-                person_names = [r["name"] for r in results if r.get("score", 0) > 0.3]
-                if person_names:
-                    return f"\nSemantically Related Persons: {', '.join(person_names)}"
-        except Exception:
-            pass  # Vector store might not be initialized
+    def _search_relevant_persons(self, question: str) -> str:
+        """Search for persons mentioned in the question."""
+        question_lower = question.lower()
+        persons = self.crm_store.get_all()
+
+        mentioned_persons = []
+        for p in persons:
+            if p.is_archived:
+                continue
+            # Check if person's name appears in question
+            if p.first_name.lower() in question_lower or p.last_name.lower() in question_lower:
+                mentioned_persons.append(p.full_name)
+            # Check if family code appears
+            elif p.family_code and p.family_code.lower() in question_lower:
+                mentioned_persons.append(p.full_name)
+
+        if mentioned_persons:
+            return f"\nPersons Mentioned in Question: {', '.join(mentioned_persons[:5])}"
         return ""
     
     def _build_context(self) -> dict:
-        """Build context from database."""
-        persons = self.person_store.get_all()
-        
+        """Build context from CRM V2 database."""
+        # Get all persons from CRM V2
+        persons = self.crm_store.get_all()
+
         context = {
             "persons": [],
-            "relationships": []
+            "families": []
         }
-        
+
+        # Get all families
+        families = self.family_registry.get_all()
+        for family in families:
+            if not family.is_archived:
+                context["families"].append({
+                    "code": family.code,
+                    "surname": family.surname,
+                    "city": family.city,
+                    "description": family.description
+                })
+
+        # Build person info with relationships from FamilyGraph
         for p in persons:
+            if p.is_archived:
+                continue
+
             person_info = {
                 "id": p.id,
-                "name": p.name,
+                "name": p.full_name,
+                "first_name": p.first_name,
+                "last_name": p.last_name,
                 "gender": p.gender,
-                "age": p.age,
-                "location": p.location,
+                "birth_year": p.birth_year,
+                "age": p.approximate_age,
+                "occupation": p.occupation,
                 "phone": p.phone,
-                "email": p.email
+                "email": p.email,
+                "city": p.city,
+                "state": p.state,
+                "country": p.country,
+                "family_code": p.family_code,
+                "gothra": p.gothra,
+                "nakshatra": p.nakshatra,
+                "notes": p.notes
             }
-            
-            # Get relationships
-            try:
-                tree = self.family_graph.get_family_tree(p.id)
-                person_info["spouse"] = self._get_names(tree["spouse"])
-                person_info["children"] = self._get_names(tree["children"])
-                person_info["parents"] = self._get_names(tree["parents"])
-                person_info["siblings"] = self._get_names(tree["siblings"])
-            except Exception:
-                person_info["spouse"] = []
-                person_info["children"] = []
-                person_info["parents"] = []
-                person_info["siblings"] = []
-            
-            # Get interests
-            try:
-                interests = self.crm_store.get_interests(p.id)
-                person_info["interests"] = interests if isinstance(interests, list) else []
-            except Exception:
-                person_info["interests"] = []
-            
-            # Get Enhanced CRM data
-            try:
-                crm_profiles = self.enhanced_crm.search(query=p.name.split()[0] if p.name else "")
-                for profile in crm_profiles:
-                    if profile.full_name.lower() == p.name.lower():
-                        if profile.city:
-                            person_info["city"] = profile.city
-                        if profile.state:
-                            person_info["state"] = profile.state
-                        if profile.country:
-                            person_info["country"] = profile.country
-                        if profile.gothra:
-                            person_info["gothra"] = profile.gothra
-                        if profile.nakshatra:
-                            person_info["nakshatra"] = profile.nakshatra
-                        if profile.general_interests and isinstance(profile.general_interests, list):
-                            person_info["enhanced_interests"] = profile.general_interests
-                        if profile.notes:
-                            person_info["notes"] = profile.notes
-                        break
-            except Exception:
-                pass
-            
+
+            # Get interests (split by newlines)
+            interests = []
+            if p.religious_interests:
+                interests.extend([i.strip() for i in p.religious_interests.split("\n") if i.strip()])
+            if p.spiritual_interests:
+                interests.extend([i.strip() for i in p.spiritual_interests.split("\n") if i.strip()])
+            if p.social_interests:
+                interests.extend([i.strip() for i in p.social_interests.split("\n") if i.strip()])
+            if p.hobbies:
+                interests.extend([i.strip() for i in p.hobbies.split("\n") if i.strip()])
+            person_info["interests"] = interests
+
+            # Get relationships from FamilyGraph by matching name to PersonStore
+            # (GraphAgent stores in PersonStore with relationships in FamilyGraph)
+            person_store_record = self._find_in_person_store(p.full_name)
+            if person_store_record:
+                relationships = self._get_relationships_from_graph(p.full_name, person_store_record.id)
+                person_info.update(relationships)
+            else:
+                # No legacy record - no relationships
+                person_info.update({
+                    "spouse": [],
+                    "children": [],
+                    "parents": [],
+                    "siblings": []
+                })
+
             context["persons"].append(person_info)
-        
+
         return context
     
-    def _get_names(self, ids: list[int]) -> list[str]:
-        """Convert IDs to names."""
+    def _get_relationships_from_graph(self, person_name: str, person_id: int) -> dict:
+        """Get relationships for a person from FamilyGraph using person ID."""
+        relationships = {
+            "spouse": [],
+            "children": [],
+            "parents": [],
+            "siblings": []
+        }
+
+        if not person_id:
+            return relationships
+
+        try:
+            # Get relationship IDs from FamilyGraph
+            spouse_ids = self.family_graph.get_spouse(person_id)
+            children_ids = self.family_graph.get_children(person_id)
+            parent_ids = self.family_graph.get_parents(person_id)
+            sibling_ids = self.family_graph.get_siblings(person_id)
+
+            # Convert IDs to names
+            relationships["spouse"] = self._ids_to_names(spouse_ids)
+            relationships["children"] = self._ids_to_names(children_ids)
+            relationships["parents"] = self._ids_to_names(parent_ids)
+            relationships["siblings"] = self._ids_to_names(sibling_ids)
+
+        except Exception:
+            # Graph query failed - return empty relationships
+            pass
+
+        return relationships
+
+    def _ids_to_names(self, person_ids: list[int]) -> list[str]:
+        """Convert person IDs to names using PersonStore."""
         names = []
-        for pid in ids:
-            p = self.person_store.get_person(pid)
-            if p:
-                names.append(p.name)
+        for pid in person_ids:
+            person = self.person_store.get_person(pid)
+            if person:
+                names.append(person.name)
         return names
+
+    def _find_in_person_store(self, full_name: str):
+        """Find person in legacy PersonStore by name."""
+        try:
+            matches = self.person_store.find_by_name(full_name)
+            for match in matches:
+                if match.name.lower() == full_name.lower():
+                    return match
+        except Exception:
+            pass
+        return None
     
     def _format_context(self, context: dict) -> str:
-        """Format context for LLM."""
+        """Format context for LLM with strict data grounding."""
         lines = []
+
+        # Add families if any
+        if context.get("families"):
+            lines.append("FAMILIES:")
+            for fam in context["families"]:
+                lines.append(f"  - {fam['code']}: {fam['surname']} family from {fam['city']}")
+            lines.append("")
+
+        # Add persons
+        if not context.get("persons"):
+            return "No persons in database."
+
+        lines.append("PERSONS:")
         for p in context["persons"]:
+            # Basic info line
             parts = [f"- {p['name']}"]
+
+            if p.get("gender"):
+                gender_map = {"M": "Male", "F": "Female", "O": "Other"}
+                parts.append(gender_map.get(p["gender"], p["gender"]))
+
             if p.get("age"):
                 parts.append(f"age {p['age']}")
+            elif p.get("birth_year"):
+                parts.append(f"born {p['birth_year']}")
+
+            # Location
             location_parts = []
-            if p.get("location"):
-                location_parts.append(p["location"])
             if p.get("city"):
                 location_parts.append(p["city"])
             if p.get("state"):
@@ -206,12 +286,24 @@ Provide a helpful answer based on the data above. Use the text history and searc
             if p.get("country"):
                 location_parts.append(p["country"])
             if location_parts:
-                parts.append(f"in {', '.join(location_parts)}")
-            if p.get("phone"):
-                parts.append(f"phone: {p['phone']}")
-            
+                parts.append(f"from {', '.join(location_parts)}")
+
+            if p.get("occupation"):
+                parts.append(f"works as {p['occupation']}")
+
             lines.append(", ".join(parts))
-            
+
+            # Family code
+            if p.get("family_code"):
+                lines.append(f"  Family: {p['family_code']}")
+
+            # Contact
+            if p.get("phone"):
+                lines.append(f"  Phone: {p['phone']}")
+            if p.get("email"):
+                lines.append(f"  Email: {p['email']}")
+
+            # Relationships
             if p.get("spouse"):
                 lines.append(f"  Spouse: {', '.join(p['spouse'])}")
             if p.get("children"):
@@ -220,20 +312,21 @@ Provide a helpful answer based on the data above. Use the text history and searc
                 lines.append(f"  Parents: {', '.join(p['parents'])}")
             if p.get("siblings"):
                 lines.append(f"  Siblings: {', '.join(p['siblings'])}")
-            interests_list = []
-            base_interests = p.get("interests", [])
-            if base_interests and isinstance(base_interests, list):
-                interests_list.extend(base_interests)
-            enhanced_int = p.get("enhanced_interests", [])
-            if enhanced_int and isinstance(enhanced_int, list):
-                interests_list.extend(enhanced_int)
-            if interests_list:
-                lines.append(f"  Interests: {', '.join(str(i) for i in interests_list)}")
+
+            # Cultural info
             if p.get("gothra"):
                 lines.append(f"  Gothra: {p['gothra']}")
             if p.get("nakshatra"):
                 lines.append(f"  Nakshatra: {p['nakshatra']}")
+
+            # Interests
+            if p.get("interests"):
+                lines.append(f"  Interests: {', '.join(p['interests'][:10])}")  # Limit to 10
+
+            # Notes
             if p.get("notes"):
-                lines.append(f"  Notes: {p['notes'][:100]}")
-        
+                lines.append(f"  Notes: {p['notes'][:150]}")  # Truncate long notes
+
+            lines.append("")  # Blank line between persons
+
         return "\n".join(lines)
