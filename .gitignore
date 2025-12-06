@@ -50,3 +50,20 @@ Thumbs.db
 # Test coverage
 .coverage
 htmlcov/
+
+# Claude Code configuration
+.claude/
+
+# Project documentation (local context)
+CLAUDE_CONTEXT.md
+
+# Experimental UI variants (keep only production run_ui.py)
+run_ui_barebones.py
+run_ui_crm_only.py
+run_ui_no_reload.py
+run_ui_simple.py
+
+# Test scripts (tests/ directory contains proper tests)
+test_pipeline.py
+test_ui_minimal.py
+test_ui_simple.py
