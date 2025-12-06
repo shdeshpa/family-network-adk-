@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Family Network</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 p-6">
+    <div class="max-w-6xl mx-auto">
+        <h1 class="text-3xl font-bold mb-6">Family Network</h1>
+        
+        <div class="flex gap-2 mb-6">
+            <button onclick="showTab('input')" id="tab-input" class="px-4 py-2 bg-blue-500 text-white rounded">Input</button>
+            <button onclick="showTab('logs')" id="tab-logs" class="px-4 py-2 bg-gray-300 rounded">Processing Logs</button>
+            <button onclick="showTab('graph')" id="tab-graph" class="px-4 py-2 bg-gray-300 rounded">Graph Data</button>
+        </div>
+        
+        <!-- INPUT TAB -->
+        <div id="panel-input" class="bg-white p-6 rounded shadow">
+            <h2 class="text-xl font-semibold mb-4">Enter Family Description</h2>
+            <textarea id="text-input" class="w-full p-3 border rounded" rows="4" 
+                placeholder="My name is Ramesh. My wife Padma lives in Hyderabad."></textarea>
+            <div class="mt-4 flex gap-2">
+                <button onclick="processText()" id="process-btn" class="px-4 py-2 bg-blue-500 text-white rounded">Process</button>
+                <button onclick="document.getElementById('text-input').value=''" class="px-4 py-2 bg-gray-300 rounded">Clear</button>
+            </div>
+            <div id="status" class="mt-4"></div>
+            <div id="results" class="mt-4"></div>
+        </div>
+        
+        <!-- LOGS TAB -->
+        <div id="panel-logs" class="bg-white p-6 rounded shadow hidden">
+            <div class="flex justify-between mb-4">
+                <h2 class="text-xl font-semibold">Processing Logs</h2>
+                <div class="flex gap-2">
+                    <button onclick="deleteSelectedLogs()" class="px-3 py-1 bg-red-500 text-white rounded text-sm">Delete Selected</button>
+                    <button onclick="clearAllLogs()" class="px-3 py-1 bg-gray-500 text-white rounded text-sm">Clear All</button>
+                    <button onclick="loadLogs()" class="px-3 py-1 bg-gray-300 rounded text-sm">Refresh</button>
+                </div>
+            </div>
+            <div id="logs-table"></div>
+            <div id="log-detail" class="mt-4"></div>
+        </div>
+        
+        <!-- GRAPH TAB -->
+        <div id="panel-graph" class="bg-white p-6 rounded shadow hidden">
+            <div class="flex justify-between mb-4">
+                <h2 class="text-xl font-semibold">Graph Data</h2>
+                <div class="flex gap-2">
+                    <button onclick="deleteSelectedPersons()" class="px-3 py-1 bg-red-500 text-white rounded text-sm">Delete Selected</button>
+                    <button onclick="loadGraphData()" class="px-3 py-1 bg-gray-300 rounded text-sm">Refresh</button>
+                </div>
+            </div>
+            <div id="persons-list"></div>
+            <div id="relationships-list" class="mt-6"></div>
+        </div>
+    </div>
+    
+    <script>
+        let currentLogs = [];
+        
+        function showTab(tab) {
+            ['input', 'logs', 'graph'].forEach(t => {
+                document.getElementById('panel-' + t).classList.toggle('hidden', t !== tab);
+                document.getElementById('tab-' + t).className = t === tab 
+                    ? 'px-4 py-2 bg-blue-500 text-white rounded' 
+                    : 'px-4 py-2 bg-gray-300 rounded';
+            });
+            if (tab === 'graph') loadGraphData();
+            if (tab === 'logs') loadLogs();
+        }
+        
+        async function processText() {
+            const text = document.getElementById('text-input').value;
+            if (!text.trim()) { alert('Enter text'); return; }
+            
+            document.getElementById('status').innerHTML = '<p class="text-blue-500">🤖 Processing via MCP pipeline...</p>';
+            document.getElementById('process-btn').disabled = true;
+            document.getElementById('results').innerHTML = '';
+            
+            try {
+                const res = await fetch('/api/process', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({text})
+                });
+                const data = await res.json();
+                
+                if (data.success) {
+                    document.getElementById('status').innerHTML = '<p class="text-green-500">✅ Done (Log #' + data.log_id + ')</p>';
+                    
+                    let html = '<div class="p-4 bg-gray-50 rounded text-sm">';
+                    html += `<p><b>Persons added:</b> ${data.data.persons.length}</p>`;
+                    html += `<p><b>Relationships added:</b> ${data.data.relationships.length}</p>`;
+                    
+                    if (data.data.errors.length > 0) {
+                        html += '<p class="text-red-500 mt-2"><b>Errors:</b></p>';
+                        data.data.errors.forEach(e => html += `<p class="ml-2 text-red-500">• ${e}</p>`);
+                    }
+                    
+                    html += '<p class="mt-2"><b>Steps:</b></p>';
+                    html += '<table class="w-full mt-1 text-xs"><tr class="bg-gray-200"><th class="p-1">Tool</th><th class="p-1">Input</th><th class="p-1">Output</th></tr>';
+                    for (const s of data.data.steps) {
+                        const input = s.input ? String(s.input).slice(0, 30) : '-';
+                        const output = s.output ? JSON.stringify(s.output).slice(0, 50) : '-';
+                        html += `<tr class="border-b"><td class="p-1">${s.tool}</td><td class="p-1">${input}</td><td class="p-1">${output}</td></tr>`;
+                    }
+                    html += '</table></div>';
+                    document.getElementById('results').innerHTML = html;
+                } else {
+                    throw new Error(data.error || 'Processing failed');
+                }
+            } catch (e) {
+                document.getElementById('status').innerHTML = `<p class="text-red-500">❌ ${e.message}</p>`;
+            }
+            document.getElementById('process-btn').disabled = false;
+        }
+        
+        async function loadLogs() {
+            const res = await fetch('/api/logs');
+            const data = await res.json();
+            currentLogs = data.logs || [];
+            
+            let html = '<table class="w-full text-sm"><tr class="bg-gray-100">';
+            html += '<th class="p-2"><input type="checkbox" onclick="toggleAllLogs(this)"></th>';
+            html += '<th class="p-2">ID</th><th class="p-2">Time</th><th class="p-2">Input</th><th class="p-2">Persons</th><th class="p-2">Rels</th><th class="p-2">Actions</th></tr>';
+            
+            for (const log of currentLogs) {
+                html += `<tr class="border-b">`;
+                html += `<td class="p-2"><input type="checkbox" class="log-checkbox" value="${log.id}"></td>`;
+                html += `<td class="p-2">${log.id}</td>`;
+                html += `<td class="p-2">${new Date(log.timestamp).toLocaleTimeString()}</td>`;
+                html += `<td class="p-2">${log.input.slice(0, 40)}...</td>`;
+                html += `<td class="p-2">${log.result.persons.length}</td>`;
+                html += `<td class="p-2">${log.result.relationships.length}</td>`;
+                html += `<td class="p-2"><button onclick="showLogDetail(${log.id})" class="text-blue-500">View</button></td>`;
+                html += `</tr>`;
+            }
+            html += '</table>';
+            
+            if (currentLogs.length === 0) {
+                html = '<p class="text-gray-500">No logs yet. Process some text first.</p>';
+            }
+            
+            document.getElementById('logs-table').innerHTML = html;
+            document.getElementById('log-detail').innerHTML = '';
+        }
+        
+        function showLogDetail(id) {
+            const log = currentLogs.find(l => l.id === id);
+            if (!log) return;
+            
+            let html = '<div class="p-4 bg-gray-50 rounded">';
+            html += `<h3 class="font-semibold">Log #${log.id}</h3>`;
+            html += `<p><b>Input:</b> ${log.input}</p>`;
+            html += `<p class="mt-2"><b>Steps:</b></p>`;
+            html += '<pre class="text-xs bg-white p-2 mt-1 overflow-auto max-h-48">' + JSON.stringify(log.result.steps, null, 2) + '</pre>';
+            html += '</div>';
+            
+            document.getElementById('log-detail').innerHTML = html;
+        }
+        
+        function toggleAllLogs(checkbox) {
+            document.querySelectorAll('.log-checkbox').forEach(cb => cb.checked = checkbox.checked);
+        }
+        
+        async function deleteSelectedLogs() {
+            const selected = [...document.querySelectorAll('.log-checkbox:checked')].map(cb => parseInt(cb.value));
+            if (selected.length === 0) { alert('Select logs first'); return; }
+            
+            for (const id of selected) {
+                await fetch('/api/logs/' + id, {method: 'DELETE'});
+            }
+            loadLogs();
+        }
+        
+        async function clearAllLogs() {
+            if (!confirm('Delete all logs?')) return;
+            await fetch('/api/logs', {method: 'DELETE'});
+            loadLogs();
+        }
+        
+        async function loadGraphData() {
+            try {
+                const [pRes, rRes] = await Promise.all([fetch('/api/persons'), fetch('/api/relationships')]);
+                const persons = await pRes.json();
+                const rels = await rRes.json();
+                
+                if (persons.error) {
+                    document.getElementById('persons-list').innerHTML = `<p class="text-red-500">Error: ${persons.error}</p>`;
+                    return;
+                }
+                
+                let html = `<h3 class="font-semibold mb-2">Persons (${persons.count})</h3>`;
+                html += '<table class="w-full text-sm"><tr class="bg-gray-100">';
+                html += '<th class="p-2"><input type="checkbox" onclick="toggleAllPersons(this)"></th>';
+                html += '<th class="p-2 text-left">Name</th><th class="p-2">Gender</th><th class="p-2">Family</th><th class="p-2">Location</th></tr>';
+                for (const p of persons.persons || []) {
+                    html += `<tr class="border-b">`;
+                    html += `<td class="p-2"><input type="checkbox" class="person-checkbox" value="${p.name}"></td>`;
+                    html += `<td class="p-2">${p.name}</td>`;
+                    html += `<td class="p-2 text-center">${p.gender || '-'}</td>`;
+                    html += `<td class="p-2">${p.family_name || '-'}</td>`;
+                    html += `<td class="p-2">${p.location || '-'}</td></tr>`;
+                }
+                document.getElementById('persons-list').innerHTML = html + '</table>';
+                
+                html = `<h3 class="font-semibold mb-2">Relationships (${rels.count})</h3>`;
+                html += '<table class="w-full text-sm"><tr class="bg-gray-100">';
+                html += '<th class="p-2 text-left">From</th><th class="p-2">Relation</th><th class="p-2 text-left">To</th></tr>';
+                for (const r of rels.relationships || []) {
+                    html += `<tr class="border-b"><td class="p-2">${r.from}</td><td class="p-2 text-center">${r.specific || r.type}</td><td class="p-2">${r.to}</td></tr>`;
+                }
+                document.getElementById('relationships-list').innerHTML = html + '</table>';
+            } catch (e) {
+                document.getElementById('persons-list').innerHTML = `<p class="text-red-500">Error: ${e.message}</p>`;
+            }
+        }
+        
+        function toggleAllPersons(checkbox) {
+            document.querySelectorAll('.person-checkbox').forEach(cb => cb.checked = checkbox.checked);
+        }
+        
+        async function deleteSelectedPersons() {
+            const selected = [...document.querySelectorAll('.person-checkbox:checked')].map(cb => cb.value);
+            if (selected.length === 0) { alert('Select persons first'); return; }
+            if (!confirm(`Delete ${selected.length} persons?`)) return;
+            
+            await fetch('/api/persons/delete', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({names: selected})
+            });
+            loadGraphData();
+        }
+    </script>
+</body>
+</html>

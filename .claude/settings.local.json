@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(PYTHONPATH=. uv run python:*)",
+      "Bash(sqlite3:*)",
+      "Bash(pkill:*)",
+      "Bash(uv run python:*)",
+      "Bash(find:*)",
+      "Bash(lsof:*)",
+      "Bash(xargs kill:*)",
+      "Bash(curl:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

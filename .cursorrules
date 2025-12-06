@@ -1,0 +1,48 @@
+# Family Network ADK - Cursor Rules
+
+## File Size Limits
+- Maximum 150 lines per Python file
+- Split large modules into focused sub-modules
+- Each function should be under 30 lines
+
+## Directory Structure
+- Maximum 2 levels of nesting from project root
+- Allowed: src/agents/, src/mcp/, tests/unit/
+- Forbidden: src/agents/audio/processors/handlers/
+
+## Code Organization
+- One class per file for agents
+- One MCP server per file
+- Group related tools in single server (max 5 tools)
+
+## Naming Conventions
+- Files: snake_case.py
+- Classes: PascalCase
+- Functions: snake_case
+- Constants: UPPER_SNAKE_CASE
+
+## Import Rules
+- Absolute imports only
+- No circular dependencies
+- Group: stdlib, third-party, local
+
+## Testing Requirements
+- Each module must have corresponding test
+- Test file mirrors source structure
+- Run tests before committing
+
+## Documentation
+- Docstrings for all public functions
+- Type hints required
+- README per major component
+
+## Dependencies
+- Use `uv add package` only
+- Pin versions in pyproject.toml
+- No requirements.txt
+
+## Forbidden Patterns
+- No global mutable state
+- No nested async callbacks > 2 levels
+- No files > 250 lines
+- No functions > 50 lines
