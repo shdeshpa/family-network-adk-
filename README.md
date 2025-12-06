@@ -559,7 +559,7 @@ print(result['summary'])
 
 **Data Layer:**
 - SQLite (Structured data)
-- GraphLite (Relationship graph)
+- graphlite (Pure-Python graph database for relationships)
 - Pydantic (Data validation)
 
 **Frontend:**
@@ -637,7 +637,7 @@ The above copyright notice and this permission notice shall be included in all c
 - Anthropic for MCP protocol specification
 - Ollama team for local LLM runtime
 - OpenAI for Whisper API
-- GraphLite team for Python graph database library
+- Eugene Eeo for graphlite - Pure-Python embedded graph database built on SQLite
 
 ---
 
