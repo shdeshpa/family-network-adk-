@@ -1,9 +1,9 @@
 """
 Orchestrator Agent - coordinates all agents.
 
-Author: Shrikant Deshpande
+Author: Shrinivas Deshpande
 Date: December 6, 2025
-Copyright (c) 2025 Shrikant Deshpande. All rights reserved.
+Copyright (c) 2025 Shrinivas Deshpande. All rights reserved.
 """
 
 from pathlib import Path

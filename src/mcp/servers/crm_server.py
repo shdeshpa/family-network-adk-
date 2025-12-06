@@ -15,9 +15,9 @@ Tools are organized by domain:
 - Profile tools: add_person, get_person, update_person, search_persons
 - Donation tools: add_donation, get_donations, donation_summary
 
-Author: Shrikant Deshpande
+Author: Shrinivas Deshpande
 Date: December 6, 2025
-Copyright (c) 2025 Shrikant Deshpande. All rights reserved.
+Copyright (c) 2025 Shrinivas Deshpande. All rights reserved.
 """
 
 from mcp.server.fastmcp import FastMCP

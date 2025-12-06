@@ -1,8 +1,9 @@
 # 🏠 Family Network ADK - Agentic AI System
 
-**Author:** Shrikant Deshpande
+**Author:** Shrinivas Deshpande
 **Date:** December 6, 2025
 **GitHub:** [@shdeshpa](https://github.com/shdeshpa)
+**Contributor:** Srikanth Mattegunta
 
 ---
 
@@ -592,17 +593,21 @@ This is a portfolio/demonstration project. For discussion or questions, please o
 
 ## 👤 Author
 
-**Shrikant Deshpande**
+**Shrinivas Deshpande**
 GitHub: [@shdeshpa](https://github.com/shdeshpa)
-LinkedIn: [Connect with me](https://linkedin.com/in/shrikant-deshpande)
+LinkedIn: [Connect with me](https://linkedin.com/in/shrinivas-deshpande)
 
 *This project demonstrates production-ready agentic AI architecture, cost-optimized LLM orchestration, and multi-modal processing pipelines.*
+
+### Contributors
+
+**Srikanth Mattegunta** - Project Contributor
 
 ---
 
 ## 📜 Copyright & License
 
-**Copyright © 2025 Shrikant Deshpande. All rights reserved.**
+**Copyright © 2025 Shrinivas Deshpande. All rights reserved.**
 
 This project is licensed under the MIT License.
 
@@ -651,4 +656,4 @@ For issues, questions, or collaboration opportunities:
 
 *Project Created: December 6, 2025*
 *Last Updated: December 6, 2025*
-*Author: Shrikant Deshpande*
+*Author: Shrinivas Deshpande*
