@@ -3,6 +3,10 @@ Extraction Agent - First pass extraction from text.
 
 Extracts persons, relationships, and qualities from transcribed audio.
 Supports multilingual input (English, Hindi, Marathi, Tamil, Telugu).
+
+Author: Shrikant Deshpande
+Date: December 6, 2025
+Copyright (c) 2025 Shrikant Deshpande. All rights reserved.
 """
 
 from dataclasses import dataclass, field

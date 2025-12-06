@@ -1,4 +1,10 @@
-"""Query Agent - natural language queries for family CRM."""
+"""
+Query Agent - natural language queries for family CRM.
+
+Author: Shrikant Deshpande
+Date: December 6, 2025
+Copyright (c) 2025 Shrikant Deshpande. All rights reserved.
+"""
 
 from src.agents.adk.llm_client import LLMClient
 from src.agents.adk.tools import list_all_persons, get_family_tree

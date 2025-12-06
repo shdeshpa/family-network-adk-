@@ -1,4 +1,10 @@
-"""Main NiceGUI application with ADK agents."""
+"""
+Main NiceGUI application with ADK agents.
+
+Author: Shrikant Deshpande
+Date: December 6, 2025
+Copyright (c) 2025 Shrikant Deshpande. All rights reserved.
+"""
 
 from pathlib import Path
 import asyncio

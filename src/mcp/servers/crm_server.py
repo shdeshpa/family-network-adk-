@@ -14,6 +14,10 @@ Tools are organized by domain:
 - Family tools: create_family, get_family, list_families
 - Profile tools: add_person, get_person, update_person, search_persons
 - Donation tools: add_donation, get_donations, donation_summary
+
+Author: Shrikant Deshpande
+Date: December 6, 2025
+Copyright (c) 2025 Shrikant Deshpande. All rights reserved.
 """
 
 from mcp.server.fastmcp import FastMCP

@@ -8,6 +8,10 @@ Models:
 
 These are pure data structures - NO database logic here.
 MCP tools use these for request/response typing.
+
+Author: Shrikant Deshpande
+Date: December 6, 2025
+Copyright (c) 2025 Shrikant Deshpande. All rights reserved.
 """
 
 from dataclasses import dataclass, field

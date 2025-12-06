@@ -1,4 +1,10 @@
-"""Transcription Agent - handles audio to text conversion."""
+"""
+Transcription Agent - handles audio to text conversion.
+
+Author: Shrikant Deshpande
+Date: December 6, 2025
+Copyright (c) 2025 Shrikant Deshpande. All rights reserved.
+"""
 
 from pathlib import Path
 from typing import Optional
