@@ -632,6 +632,7 @@ The above copyright notice and this permission notice shall be included in all c
 - Anthropic for MCP protocol specification
 - Ollama team for local LLM runtime
 - OpenAI for Whisper API
+- GraphLite team for Python graph database library
 
 ---
 
