@@ -235,16 +235,17 @@ class FamilyNetworkApp:
         self._render_tree_view()
     
     def _render_tree_view(self):
-        """Render the tree view."""
+        """Render the tree view using CRM V2 data."""
         if not hasattr(self, 'tree_container'):
             return
         try:
             self.tree_container.clear()
             with self.tree_container:
                 tree = CytoscapeTree(
+                    crm_store=self.crm_store,
+                    family_registry=self.family_registry,
                     person_store=self.person_store,
-                    family_graph=self.family_graph,
-                    enhanced_crm=self.enhanced_crm
+                    family_graph=self.family_graph
                 )
                 tree.render()
         except Exception as e:
