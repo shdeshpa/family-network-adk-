@@ -16,7 +16,7 @@ from nicegui import ui
 from src.ui.audio_recorder import AudioRecorderUI
 from src.ui.cytoscape_tree import CytoscapeTree
 from src.ui.crm_editor import CRMEditor
-from src.ui.crm_editor_v2 import CRMEditorV2
+from src.ui.crm_table_view import CRMTableView
 from src.graph.person_store import PersonStore
 from src.graph.family_graph import FamilyGraph
 from src.graph.crm_store import CRMStore
@@ -261,29 +261,9 @@ class FamilyNetworkApp:
             ui.notify(f"Error refreshing tree: {str(e)}", type="negative")
     
     def _setup_crm_tab(self):
-        """Setup CRM tab with V2 editor."""
-        with ui.row().classes("w-full justify-between items-center mb-4"):
-            ui.label("📇 Contact Management").classes("text-xl font-bold")
-            with ui.row().classes("gap-2"):
-                ui.button("V2 (New)", on_click=self._show_crm_v2).classes("text-xs bg-green-500 text-white")
-                ui.button("V1 (Legacy)", on_click=self._show_crm_v1).classes("text-xs bg-gray-400 text-white")
-
-        self.crm_container = ui.column().classes("w-full")
-        self._show_crm_v2()
-
-    def _show_crm_v2(self):
-        """Show CRM V2 editor."""
-        self.crm_container.clear()
-        with self.crm_container:
-            crm_editor = CRMEditorV2()
-            crm_editor.render()
-
-    def _show_crm_v1(self):
-        """Show legacy CRM V1 editor."""
-        self.crm_container.clear()
-        with self.crm_container:
-            crm_editor = CRMEditor()
-            crm_editor.render()
+        """Setup CRM tab with modern table view."""
+        crm_table = CRMTableView()
+        crm_table.render()
     
     def _setup_chat_tab(self):
         ui.label("💬 Ask about your family").classes("text-xl font-bold mb-4")
