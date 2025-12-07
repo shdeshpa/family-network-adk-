@@ -84,6 +84,9 @@ class FamilyOrchestrator:
                     "age": p.age,
                     "location": p.location,
                     "occupation": p.occupation,
+                    "phone": p.phone,
+                    "email": p.email,
+                    "interests": p.interests,
                     "is_speaker": p.is_speaker,
                     "raw_mentions": p.raw_mentions
                 }
