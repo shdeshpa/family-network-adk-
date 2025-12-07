@@ -120,12 +120,13 @@ class CRMEditorV2:
                     # Table header
                     with ui.row().classes("w-full bg-gray-100 p-2 font-bold text-sm"):
                         ui.label("Name").classes("w-48")
-                        ui.label("Gender").classes("w-20")
-                        ui.label("Birth Year").classes("w-24")
-                        ui.label("Occupation").classes("w-32")
-                        ui.label("City").classes("w-32")
+                        ui.label("Gender").classes("w-16")
+                        ui.label("Age").classes("w-16")
                         ui.label("Phone").classes("w-32")
-                        ui.label("Actions").classes("w-24")
+                        ui.label("Email").classes("w-48")
+                        ui.label("City").classes("w-32")
+                        ui.label("Activities").classes("flex-1")
+                        ui.label("Actions").classes("w-20")
 
                     # Table rows
                     for person in persons:
@@ -135,15 +136,26 @@ class CRMEditorV2:
 
     def _render_person_row(self, person: PersonProfileV2):
         """Render a person row in the table."""
+        # Get interests summary
+        interests_parts = []
+        if person.hobbies:
+            interests_parts.append(person.hobbies.split('\n')[0][:30])  # First line, truncated
+        if person.religious_interests:
+            interests_parts.append(person.religious_interests.split('\n')[0][:30])
+        interests_summary = ", ".join(interests_parts[:2]) if interests_parts else "-"
+        if len(interests_summary) > 50:
+            interests_summary = interests_summary[:47] + "..."
+
         with ui.row().classes("w-full p-2 text-sm border-b hover:bg-gray-50 items-center"):
             ui.label(f"{person.first_name} {person.last_name}").classes("w-48 font-medium")
-            ui.label(person.gender or "-").classes("w-20")
-            ui.label(str(person.birth_year) if person.birth_year else "-").classes("w-24")
-            ui.label(person.occupation or "-").classes("w-32 truncate")
+            ui.label(person.gender or "-").classes("w-16")
+            ui.label(str(person.approximate_age) if person.approximate_age else "-").classes("w-16")
+            ui.label(person.phone or "-").classes("w-32 truncate")
+            ui.label(person.email or "-").classes("w-48 truncate")
             ui.label(person.city or "-").classes("w-32 truncate")
-            ui.label(person.phone or "-").classes("w-32")
+            ui.label(interests_summary).classes("flex-1 truncate text-gray-600")
 
-            with ui.row().classes("w-24 gap-1"):
+            with ui.row().classes("w-20 gap-1"):
                 ui.button("👁️", on_click=lambda p=person: self._show_person_details(p)).props("flat dense size=sm").tooltip("View details")
                 ui.button("✏️", on_click=lambda p=person: self._edit_person(p)).props("flat dense size=sm").tooltip("Edit")
 
@@ -156,20 +168,27 @@ class CRMEditorV2:
                 # Table
                 with ui.row().classes("w-full bg-gray-100 p-2 font-bold text-sm"):
                     ui.label("Name").classes("w-48")
-                    ui.label("Gender").classes("w-20")
+                    ui.label("Phone").classes("w-32")
+                    ui.label("Email").classes("w-48")
                     ui.label("City").classes("w-32")
-                    ui.label("Notes").classes("flex-1")
-                    ui.label("Actions").classes("w-24")
+                    ui.label("Activities").classes("flex-1")
+                    ui.label("Actions").classes("w-20")
 
                 for person in persons:
+                    # Get interests summary
+                    interests_parts = []
+                    if person.hobbies:
+                        interests_parts.append(person.hobbies.split('\n')[0][:30])
+                    interests_summary = interests_parts[0] if interests_parts else "-"
+
                     with ui.row().classes("w-full p-2 text-sm border-b hover:bg-gray-50 items-center"):
                         ui.label(f"{person.first_name} {person.last_name}").classes("w-48 font-medium")
-                        ui.label(person.gender or "-").classes("w-20")
+                        ui.label(person.phone or "-").classes("w-32 truncate")
+                        ui.label(person.email or "-").classes("w-48 truncate")
                         ui.label(person.city or "-").classes("w-32")
-                        notes_preview = (person.notes[:50] + "...") if person.notes and len(person.notes) > 50 else (person.notes or "-")
-                        ui.label(notes_preview).classes("flex-1 truncate text-gray-600")
+                        ui.label(interests_summary).classes("flex-1 truncate text-gray-600")
 
-                        with ui.row().classes("w-24 gap-1"):
+                        with ui.row().classes("w-20 gap-1"):
                             ui.button("👁️", on_click=lambda p=person: self._show_person_details(p)).props("flat dense size=sm").tooltip("View")
                             ui.button("✏️", on_click=lambda p=person: self._edit_person(p)).props("flat dense size=sm").tooltip("Edit")
 
@@ -196,19 +215,27 @@ class CRMEditorV2:
             with ui.card().classes("w-full p-4"):
                 with ui.row().classes("w-full bg-gray-100 p-2 font-bold text-sm"):
                     ui.label("Name").classes("w-48")
-                    ui.label("Family").classes("w-32")
+                    ui.label("Phone").classes("w-32")
+                    ui.label("Email").classes("w-48")
                     ui.label("City").classes("w-32")
-                    ui.label("Occupation").classes("w-32")
-                    ui.label("Actions").classes("w-24")
+                    ui.label("Activities").classes("flex-1")
+                    ui.label("Actions").classes("w-20")
 
                 for person in persons:
+                    # Get interests summary
+                    interests_parts = []
+                    if person.hobbies:
+                        interests_parts.append(person.hobbies.split('\n')[0][:30])
+                    interests_summary = interests_parts[0] if interests_parts else "-"
+
                     with ui.row().classes("w-full p-2 text-sm border-b hover:bg-gray-50 items-center"):
                         ui.label(f"{person.first_name} {person.last_name}").classes("w-48 font-medium")
-                        ui.label(person.family_code or "-").classes("w-32")
+                        ui.label(person.phone or "-").classes("w-32 truncate")
+                        ui.label(person.email or "-").classes("w-48 truncate")
                         ui.label(person.city or "-").classes("w-32")
-                        ui.label(person.occupation or "-").classes("w-32 truncate")
+                        ui.label(interests_summary).classes("flex-1 truncate text-gray-600")
 
-                        with ui.row().classes("w-24 gap-1"):
+                        with ui.row().classes("w-20 gap-1"):
                             ui.button("👁️", on_click=lambda p=person: self._show_person_details(p)).props("flat dense size=sm")
                             ui.button("✏️", on_click=lambda p=person: self._edit_person(p)).props("flat dense size=sm")
 
@@ -243,6 +270,34 @@ class CRMEditorV2:
                 self._detail_row("Family Code", person.family_code or "-")
                 self._detail_row("Gothra", person.gothra or "-")
                 self._detail_row("Nakshatra", person.nakshatra or "-")
+
+                # Interests & Activities
+                has_interests = any([
+                    person.religious_interests,
+                    person.spiritual_interests,
+                    person.social_interests,
+                    person.hobbies
+                ])
+
+                if has_interests:
+                    ui.separator()
+                    ui.label("🌟 Interests & Activities").classes("font-bold text-sm mt-2 mb-2")
+
+                    if person.religious_interests:
+                        ui.label("Religious Interests:").classes("font-bold text-xs text-gray-600")
+                        ui.label(person.religious_interests).classes("text-sm text-gray-700 whitespace-pre-wrap mb-2")
+
+                    if person.spiritual_interests:
+                        ui.label("Spiritual Interests:").classes("font-bold text-xs text-gray-600")
+                        ui.label(person.spiritual_interests).classes("text-sm text-gray-700 whitespace-pre-wrap mb-2")
+
+                    if person.social_interests:
+                        ui.label("Social Interests:").classes("font-bold text-xs text-gray-600")
+                        ui.label(person.social_interests).classes("text-sm text-gray-700 whitespace-pre-wrap mb-2")
+
+                    if person.hobbies:
+                        ui.label("Hobbies & Activities:").classes("font-bold text-xs text-gray-600")
+                        ui.label(person.hobbies).classes("text-sm text-gray-700 whitespace-pre-wrap mb-2")
 
                 if person.notes:
                     ui.separator()
