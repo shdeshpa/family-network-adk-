@@ -268,8 +268,98 @@ class CRMEditorV2:
             ui.label(value).classes("text-sm text-gray-700")
 
     def _edit_person(self, person: PersonProfileV2):
-        """Edit person details (placeholder)."""
-        ui.notify(f"Edit functionality for {person.first_name} - Coming soon!", type="info")
+        """Edit person details."""
+        with ui.dialog() as dialog, ui.card().classes("p-6 min-w-[600px]"):
+            ui.label(f"✏️ Edit {person.first_name} {person.last_name}").classes("text-xl font-bold mb-4")
+
+            with ui.column().classes("w-full gap-3"):
+                # Basic Information
+                ui.label("Basic Information").classes("font-bold text-sm text-gray-700 mt-2")
+                with ui.row().classes("w-full gap-2"):
+                    first_name = ui.input("First Name", value=person.first_name).props("outlined dense").classes("flex-1")
+                    last_name = ui.input("Last Name", value=person.last_name).props("outlined dense").classes("flex-1")
+
+                with ui.row().classes("w-full gap-2"):
+                    gender = ui.select(
+                        label="Gender",
+                        options={"M": "Male", "F": "Female", "O": "Other"},
+                        value=person.gender or ""
+                    ).props("outlined dense").classes("flex-1")
+                    birth_year = ui.number("Birth Year", value=person.birth_year, format="%.0f").props("outlined dense").classes("flex-1")
+
+                occupation = ui.input("Occupation", value=person.occupation or "").props("outlined dense").classes("w-full")
+
+                # Contact Information
+                ui.label("Contact Information").classes("font-bold text-sm text-gray-700 mt-2")
+                with ui.row().classes("w-full gap-2"):
+                    phone = ui.input("Phone", value=person.phone or "").props("outlined dense").classes("flex-1")
+                    email = ui.input("Email", value=person.email or "").props("outlined dense").classes("flex-1")
+
+                # Location
+                ui.label("Location").classes("font-bold text-sm text-gray-700 mt-2")
+                with ui.row().classes("w-full gap-2"):
+                    city = ui.input("City", value=person.city or "").props("outlined dense").classes("flex-1")
+                    state = ui.input("State", value=person.state or "").props("outlined dense").classes("flex-1")
+
+                country = ui.input("Country", value=person.country or "").props("outlined dense").classes("w-full")
+
+                # Cultural Information
+                ui.label("Cultural Information").classes("font-bold text-sm text-gray-700 mt-2")
+                with ui.row().classes("w-full gap-2"):
+                    gothra = ui.input("Gothra", value=person.gothra or "").props("outlined dense").classes("flex-1")
+                    nakshatra = ui.input("Nakshatra", value=person.nakshatra or "").props("outlined dense").classes("flex-1")
+
+                # Interests (multi-line)
+                ui.label("Interests & Activities").classes("font-bold text-sm text-gray-700 mt-2")
+                religious_interests = ui.textarea("Religious Interests", value=person.religious_interests or "").props("outlined").classes("w-full").props("rows=2")
+                spiritual_interests = ui.textarea("Spiritual Interests", value=person.spiritual_interests or "").props("outlined").classes("w-full").props("rows=2")
+                social_interests = ui.textarea("Social Interests", value=person.social_interests or "").props("outlined").classes("w-full").props("rows=2")
+                hobbies = ui.textarea("Hobbies", value=person.hobbies or "").props("outlined").classes("w-full").props("rows=2")
+
+                # Notes
+                ui.label("Notes").classes("font-bold text-sm text-gray-700 mt-2")
+                notes = ui.textarea("Additional Notes", value=person.notes or "").props("outlined").classes("w-full").props("rows=3")
+
+            # Buttons
+            with ui.row().classes("w-full justify-end gap-2 mt-4"):
+                ui.button("Cancel", on_click=dialog.close).props("flat")
+
+                def save_changes():
+                    """Save the edited person."""
+                    try:
+                        success = self.store.update_person(
+                            person.id,
+                            first_name=first_name.value,
+                            last_name=last_name.value,
+                            gender=gender.value if gender.value else None,
+                            birth_year=int(birth_year.value) if birth_year.value else None,
+                            occupation=occupation.value,
+                            phone=phone.value,
+                            email=email.value,
+                            city=city.value,
+                            state=state.value,
+                            country=country.value,
+                            gothra=gothra.value,
+                            nakshatra=nakshatra.value,
+                            religious_interests=religious_interests.value,
+                            spiritual_interests=spiritual_interests.value,
+                            social_interests=social_interests.value,
+                            hobbies=hobbies.value,
+                            notes=notes.value
+                        )
+
+                        if success:
+                            ui.notify(f"✅ Updated {first_name.value} {last_name.value}", type="positive")
+                            dialog.close()
+                            self._load_data()
+                        else:
+                            ui.notify("❌ Failed to update person", type="negative")
+                    except Exception as e:
+                        ui.notify(f"❌ Error: {str(e)}", type="negative")
+
+                ui.button("Save Changes", on_click=save_changes).props("color=primary")
+
+        dialog.open()
 
     def _show_add_family_dialog(self):
         """Show dialog to add a new family."""

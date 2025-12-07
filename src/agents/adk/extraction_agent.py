@@ -26,6 +26,9 @@ class ExtractedPerson:
     age: Optional[int] = None
     location: Optional[str] = None
     occupation: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    interests: Optional[str] = None  # Activities, hobbies, volunteer work
     is_speaker: bool = False
     raw_mentions: list[str] = field(default_factory=list)
 
@@ -60,8 +63,39 @@ The text may mix English with Hindi/Marathi/Tamil/Telugu. Recognize relationship
 - Marathi: bhau (brother), bayko (wife), navra (husband), mulga (son), mulgi (daughter)
 - Hindi: bhai (brother), behen (sister), pati (husband), patni (wife)
 
+Extract ALL available information for each person:
+- Name (required)
+- Gender (M/F)
+- Age or birth year
+- Location (city, state, country)
+- Occupation/profession
+- Phone number (any format)
+- Email address
+- Interests/Activities: hobbies, volunteer work, temple visits, religious activities, social activities
+- Whether they are the speaker (is_speaker: true/false)
+
 JSON format (output ONLY this, nothing else):
-{"speaker_name":"Name","persons":[{"name":"Name","gender":"M or F","location":"City","is_speaker":true}],"relationships":[{"person1":"Name1","person2":"Name2","relation_term":"wife"}]}"""
+{
+  "speaker_name": "Name",
+  "persons": [
+    {
+      "name": "Full Name",
+      "gender": "M or F",
+      "age": 45,
+      "location": "City, State",
+      "occupation": "Job Title",
+      "phone": "123-456-7890",
+      "email": "email@example.com",
+      "interests": "Temple volunteer, yoga, community service",
+      "is_speaker": true
+    }
+  ],
+  "relationships": [
+    {"person1": "Name1", "person2": "Name2", "relation_term": "wife"}
+  ]
+}
+
+IMPORTANT: Extract phone numbers, emails, and activities if mentioned in the text."""
 
 
 class ExtractionAgent:
@@ -173,6 +207,9 @@ class ExtractionAgent:
                         age=p.get('age'),
                         location=p.get('location'),
                         occupation=p.get('occupation'),
+                        phone=p.get('phone'),
+                        email=p.get('email'),
+                        interests=p.get('interests'),
                         is_speaker=p.get('is_speaker', False)
                     ))
             

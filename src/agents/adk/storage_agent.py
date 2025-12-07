@@ -305,13 +305,19 @@ class StorageAgent:
                 else:
                     mentions_str = str(raw_mentions)
 
+                # Extract interests/activities
+                interests = person_data.get("interests", "")
+
                 add_result = await call_crm_tool("add_person", {
                     "first_name": first_name,
                     "last_name": last_name,
                     "gender": person_data.get("gender") or "",
                     "occupation": person_data.get("occupation") or "",
+                    "phone": person_data.get("phone") or "",
+                    "email": person_data.get("email") or "",
                     "city": city,
                     "family_code": family_code,
+                    "hobbies": interests or "",  # Store interests in hobbies field
                     "notes": f"Created from extraction. Raw mentions: {mentions_str}"
                 })
 
