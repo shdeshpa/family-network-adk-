@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from nicegui import ui
 
 from src.ui.audio_recorder import AudioRecorderUI
-from src.ui.cytoscape_tree import CytoscapeTree
+from src.ui.d3_tree_view import D3TreeView
 from src.ui.crm_editor import CRMEditor
 from src.ui.crm_table_view import CRMTableView
 from src.graph.person_store import PersonStore
@@ -22,6 +22,8 @@ from src.graph.family_graph import FamilyGraph
 from src.graph.crm_store import CRMStore
 from src.graph.enhanced_crm import EnhancedCRM
 from src.graph.text_history import TextHistory
+from src.graph.family_registry import FamilyRegistry
+from src.graph.crm_store_v2 import CRMStoreV2
 from src.agents.adk.orchestrator import FamilyOrchestrator
 from src.agents.adk.query_agent import QueryAgent
 
@@ -36,11 +38,16 @@ class FamilyNetworkApp:
         self.recordings_dir = Path("data/recordings")
         self.recordings_dir.mkdir(parents=True, exist_ok=True)
 
+        # Legacy stores
         self.person_store = PersonStore()
         self.family_graph = FamilyGraph()
         self.crm_store = CRMStore()
         self.enhanced_crm = EnhancedCRM()
         self.text_history = TextHistory()
+
+        # CRM V2 stores
+        self.family_registry = FamilyRegistry()
+        self.crm_store_v2 = CRMStoreV2()
 
         # Lazy-load these to avoid startup crashes
         self._orchestrator = None
@@ -71,14 +78,17 @@ class FamilyNetworkApp:
     def setup(self):
         """Setup the main UI with tabs."""
         ui.label("🏠 Family Network System").classes("text-3xl font-bold mb-6")
-        
+
         with ui.tabs().classes("w-full") as self.tabs:
             self.record_tab = ui.tab("🎤 Record")
             self.text_tab = ui.tab("📝 Text Input")
             self.tree_tab = ui.tab("🌳 Family Tree")
             self.crm_tab = ui.tab("📇 CRM")
             self.chat_tab = ui.tab("💬 Chat")
-        
+
+        # Add listener for tab changes
+        self.tabs.on('update:model-value', lambda e: self._on_tab_change(e.args))
+
         with ui.tab_panels(self.tabs, value=self.record_tab).classes("w-full"):
             with ui.tab_panel(self.record_tab):
                 self._setup_record_tab()
@@ -230,9 +240,33 @@ class FamilyNetworkApp:
         with ui.row().classes("w-full justify-between items-center mb-4"):
             ui.label("🌳 Family Tree").classes("text-xl font-bold")
             ui.button("🔄 Refresh Tree", on_click=self._refresh_tree_view).classes("bg-blue-500")
-        
+
+        ui.label("Click on any person to add more details").classes("text-sm text-gray-600 mb-2")
+
         self.tree_container = ui.column().classes("w-full")
         self._render_tree_view()
+
+        # Hidden button to trigger person detail dialog from JavaScript
+        self.person_detail_trigger = ui.button("", on_click=lambda: self._show_person_detail_dialog()).style("display: none")
+
+        # Set up JavaScript handler for node clicks using HTML instead of run_javascript
+        ui.add_body_html('''
+            <script>
+                window.selectedPersonId = null;
+                window.selectedPersonName = null;
+                window.onD3NodeClick = function(personId, personName) {
+                    console.log('Node clicked:', personId, personName);
+                    window.selectedPersonId = personId;
+                    window.selectedPersonName = personName;
+                    // Trigger the hidden button to open dialog
+                    document.querySelectorAll('button').forEach(btn => {
+                        if (btn.textContent === '' && btn.style.display === 'none') {
+                            btn.click();
+                        }
+                    });
+                };
+            </script>
+        ''')
     
     def _render_tree_view(self):
         """Render the tree view using CRM V2 data."""
@@ -241,8 +275,8 @@ class FamilyNetworkApp:
         try:
             self.tree_container.clear()
             with self.tree_container:
-                tree = CytoscapeTree(
-                    crm_store=self.crm_store,
+                tree = D3TreeView(
+                    crm_store=self.crm_store_v2,
                     family_registry=self.family_registry,
                     person_store=self.person_store,
                     family_graph=self.family_graph
@@ -259,6 +293,139 @@ class FamilyNetworkApp:
             ui.notify("Tree refreshed", type="info")
         except Exception as e:
             ui.notify(f"Error refreshing tree: {str(e)}", type="negative")
+
+    async def _show_person_detail_dialog(self):
+        """Show dialog to add details to a selected person."""
+        # Get person ID and name from JavaScript
+        result = await ui.run_javascript('({id: window.selectedPersonId, name: window.selectedPersonName})')
+
+        if not result or not result.get('id'):
+            ui.notify("No person selected", type="warning")
+            return
+
+        person_id = result['id']
+        person_name = result['name']
+
+        # Get person details from CRM
+        person = self.crm_store_v2.get_by_id(person_id)
+        if not person:
+            ui.notify(f"Person with ID {person_id} not found", type="negative")
+            return
+
+        # Create dialog
+        with ui.dialog() as dialog, ui.card().classes("w-full max-w-2xl"):
+            ui.label(f"Add Details for {person_name}").classes("text-xl font-bold mb-4")
+
+            # Show current details
+            with ui.expansion("Current Details", icon="info").classes("w-full mb-4"):
+                ui.label(f"Name: {person.full_name}").classes("mb-1")
+                if person.gender:
+                    ui.label(f"Gender: {person.gender}").classes("mb-1")
+                if person.phone:
+                    ui.label(f"Phone: {person.phone}").classes("mb-1")
+                if person.email:
+                    ui.label(f"Email: {person.email}").classes("mb-1")
+
+            ui.label("Speak or type additional information about this person:").classes("mb-2")
+
+            # Audio recorder
+            dialog_audio_container = ui.column().classes("w-full mb-4")
+            with dialog_audio_container:
+                person_audio_recorder = AudioRecorderUI(
+                    on_audio_received=lambda audio_bytes: self._process_person_audio(
+                        audio_bytes, person_id, person_name, dialog
+                    )
+                )
+
+            # Text input alternative
+            ui.label("Or type details:").classes("mt-4 mb-2")
+            person_text_input = ui.textarea(
+                placeholder=f"Example: {person_name} loves gardening and lives in Seattle..."
+            ).classes("w-full").props("rows=3")
+
+            # Results container
+            person_results = ui.column().classes("w-full mt-4")
+
+            # Buttons
+            with ui.row().classes("w-full justify-end gap-2 mt-4"):
+                ui.button("Cancel", on_click=dialog.close).props("flat")
+                ui.button(
+                    "💾 Submit Text",
+                    on_click=lambda: self._process_person_text(
+                        person_text_input.value, person_id, person_name, dialog, person_results
+                    )
+                ).classes("bg-blue-500")
+
+        dialog.open()
+
+    async def _process_person_audio(self, audio_bytes: bytes, person_id: int, person_name: str, dialog):
+        """Process audio recording for a specific person."""
+        try:
+            ui.notify(f"Processing audio for {person_name}...", type="info")
+
+            # Save audio file
+            raw_path = self.recordings_dir / f"person_{person_id}_update.webm"
+            raw_path.write_bytes(audio_bytes)
+
+            # Process with orchestrator, providing person context
+            loop = asyncio.get_event_loop()
+            audio_path_str = str(raw_path.absolute())
+
+            # Create context text to prepend to transcription
+            context = f"This is additional information about {person_name} (ID: {person_id}):"
+
+            result = await loop.run_in_executor(
+                None,
+                lambda: self.orchestrator.process_audio_file(audio_path_str)
+            )
+
+            if result.get('success'):
+                ui.notify(f"Details added for {person_name}!", type="positive")
+                dialog.close()
+                self._refresh_tree_view()
+            else:
+                error_msg = result.get('error', 'Unknown error')
+                ui.notify(f"Error: {error_msg}", type="negative")
+
+        except Exception as e:
+            ui.notify(f"Error processing audio: {str(e)}", type="negative")
+
+    async def _process_person_text(self, text: str, person_id: int, person_name: str, dialog, results_container):
+        """Process text input for a specific person."""
+        if not text or not text.strip():
+            ui.notify("Please enter some text", type="warning")
+            return
+
+        try:
+            results_container.clear()
+            with results_container:
+                ui.label("Processing...").classes("text-blue-500")
+
+            # Add context to the text
+            context_text = f"This is about {person_name} (existing person): {text}"
+
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: self.orchestrator.process_text(context_text)
+            )
+
+            results_container.clear()
+            with results_container:
+                if result.get('success'):
+                    ui.label("✅ Details added successfully!").classes("text-green-600 font-bold")
+                    ui.notify(f"Details added for {person_name}!", type="positive")
+                    await asyncio.sleep(1)
+                    dialog.close()
+                    self._refresh_tree_view()
+                else:
+                    error_msg = result.get('error', 'Unknown error')
+                    ui.label(f"❌ Error: {error_msg}").classes("text-red-600")
+
+        except Exception as e:
+            results_container.clear()
+            with results_container:
+                ui.label(f"❌ Error: {str(e)}").classes("text-red-600")
     
     def _setup_crm_tab(self):
         """Setup CRM tab with modern table view."""
@@ -326,35 +493,82 @@ class FamilyNetworkApp:
         try:
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(executor, self.orchestrator.process_text, text)
-            
+
             # Update history with results
             if result.get("success"):
                 extraction = result.get("extraction", {})
                 self.text_history.update_status(
-                    entry_id, 
+                    entry_id,
                     "processed",
                     persons=len(extraction.get("persons", [])),
                     relationships=len(extraction.get("relationships", []))
                 )
+
+                # Check for warnings from RelationExpert or Storage
+                warnings = []
+                if "relation_expert" in result:
+                    merges = result["relation_expert"].get("auto_merged", 0)
+                    if merges > 0:
+                        warnings.append(f"Merged {merges} duplicate(s) with existing records")
+
+                if "storage" in result:
+                    storage_errors = result["storage"].get("errors", [])
+                    if storage_errors:
+                        # Log technical details but show user-friendly message
+                        print(f"[UI] Storage warnings: {storage_errors}")
+                        warnings.append("Some data may need review (check CRM tab)")
+
+                # Show result with warnings if any
+                self._display_result(result, self.text_results_container)
+                if warnings:
+                    ui.notify("\n".join(warnings), type="warning", position="top")
+
             else:
                 self.text_history.update_status(entry_id, "failed", error=result.get("error", ""))
-            
-            self._display_result(result, self.text_results_container)
+                # Show user-friendly error message
+                self._update_results(
+                    "❌ Processing failed. Please check your input and try again.",
+                    self.text_results_container
+                )
+                # Log technical details
+                print(f"[UI] Processing error: {result.get('error', 'Unknown error')}")
+
             self._load_text_history()
 
             # Don't auto-navigate - let user review results first
             # if result.get("success"):
             #     self._switch_to_tree()
-                
+
         except Exception as e:
-            self.text_history.update_status(entry_id, "failed", error=str(e))
-            self._update_results(f"❌ {str(e)}", self.text_results_container)
+            # Log technical error
+            print(f"[UI] Exception during text processing: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+            # Show user-friendly message
+            self.text_history.update_status(entry_id, "failed", error="Processing error")
+            self._update_results(
+                "❌ An error occurred while processing. Please try again or contact support if the issue persists.",
+                self.text_results_container
+            )
             self._load_text_history()
     
+    def _on_tab_change(self, new_tab):
+        """Handle tab changes - refresh tree view when navigating to it."""
+        if new_tab == self.tree_tab:
+            print("[FamilyNetworkApp] Navigated to Family Tree tab - refreshing...")
+            self._render_tree_view()
+
+    def _view_family_tree(self):
+        """Navigate to Family Tree and refresh the view."""
+        self._render_tree_view()  # Refresh first
+        self.tabs.set_value(self.tree_tab)  # Then navigate
+        ui.notify("✅ Family Tree updated!", type="positive")
+
     def _switch_to_tree(self):
         self.tabs.set_value(self.tree_tab)
         ui.notify("✅ Updated! View tree below.", type="positive")
-    
+
     async def _send_chat(self):
         q = self.chat_input.value
         if not q:
@@ -451,6 +665,17 @@ class FamilyNetworkApp:
                         if persons > 0:
                             ui.label(f"✅ Added {persons} person(s)").classes("text-green-600 text-sm")
 
+                        # Duplicates Skipped
+                        duplicates = storage.get("duplicates_skipped", [])
+                        if duplicates:
+                            with ui.expansion("⚠️ Duplicates Detected (Not Stored)", icon="content_copy").classes("mt-2 text-yellow-600"):
+                                for dup in duplicates:
+                                    with ui.row().classes("w-full items-start gap-2 p-2 bg-yellow-50 rounded mb-2"):
+                                        ui.icon("person").classes("text-yellow-600")
+                                        with ui.column().classes("flex-1"):
+                                            ui.label(f"{dup['name']}").classes("font-semibold text-sm")
+                                            ui.label(f"Reason: {dup['reason']}").classes("text-xs text-gray-600")
+
                         # Errors/Warnings
                         errors = storage.get("errors", [])
                         if errors:
@@ -460,7 +685,7 @@ class FamilyNetworkApp:
 
                 # Action Buttons
                 with ui.row().classes("gap-2 mt-4"):
-                    ui.button("View Family Tree", on_click=lambda: self.tabs.set_value(self.tree_tab)).classes("bg-blue-500")
+                    ui.button("View Family Tree", on_click=self._view_family_tree).classes("bg-blue-500")
                     ui.button("View in CRM", on_click=lambda: self.tabs.set_value(self.crm_tab)).classes("bg-green-500")
             else:
                 with ui.card().classes("w-full p-4 bg-red-50 border-l-4 border-red-500"):

@@ -3,6 +3,7 @@
 from nicegui import ui
 from typing import Optional
 import json
+import uuid
 
 from src.graph.person_store import PersonStore
 from src.graph.family_graph import FamilyGraph
@@ -26,6 +27,8 @@ class CytoscapeTree:
         # Legacy stores for relationship graph
         self.person_store = person_store or PersonStore()
         self.family_graph = family_graph or FamilyGraph()
+        # Unique ID for this instance
+        self.container_id = f"cy-container-{uuid.uuid4().hex[:8]}"
     
     def render(self):
         """Render the tree view using CRM V2 data."""
@@ -53,31 +56,35 @@ class CytoscapeTree:
         
         # Build graph data
         graph_data = self._build_graph_data(persons)
-        
-        # Container div (no script)
-        ui.html('<div id="cy-container" style="width:100%;height:450px;border:1px solid #e5e7eb;border-radius:8px;background:#fafafa;"></div>', sanitize=False)
-        
-        # Add Cytoscape library
+
+        # Container div with unique ID
+        ui.html(f'<div id="{self.container_id}" style="width:100%;height:450px;border:1px solid #e5e7eb;border-radius:8px;background:#fafafa;"></div>', sanitize=False)
+
+        # Add Cytoscape library (only once)
         ui.add_head_html('<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>')
-        
+
         # Add initialization script to body
         init_script = f'''
         <script>
-        (function initCy() {{
-            if (typeof cytoscape === 'undefined') {{
-                setTimeout(initCy, 100);
-                return;
-            }}
-            
-            var container = document.getElementById('cy-container');
-            if (!container) {{
-                setTimeout(initCy, 100);
-                return;
-            }}
-            
-            var elements = {graph_data};
-            
-            window.cy = cytoscape({{
+        (function initCy_{self.container_id.replace('-', '_')}() {{
+            try {{
+                if (typeof cytoscape === 'undefined') {{
+                    console.log('[{self.container_id}] Cytoscape not loaded yet, retrying...');
+                    setTimeout(initCy_{self.container_id.replace('-', '_')}, 100);
+                    return;
+                }}
+
+                var container = document.getElementById('{self.container_id}');
+                if (!container) {{
+                    console.log('[{self.container_id}] Container not found, retrying...');
+                    setTimeout(initCy_{self.container_id.replace('-', '_')}, 100);
+                    return;
+                }}
+
+                var elements = {graph_data};
+                console.log('[{self.container_id}] Initializing Cytoscape with', elements.length, 'elements');
+
+                var cy = cytoscape({{
                 container: container,
                 elements: elements,
                 style: [
@@ -154,18 +161,30 @@ class CytoscapeTree:
                     }}
                 ],
                 layout: {{
-                    name: 'breadthfirst',
-                    directed: true,
-                    padding: 20,
-                    spacingFactor: 1.2
+                    name: 'grid',
+                    rows: Math.ceil(Math.sqrt(elements.length)),
+                    cols: Math.ceil(Math.sqrt(elements.length)),
+                    padding: 30
                 }},
                 userZoomingEnabled: true,
                 userPanningEnabled: true,
                 minZoom: 0.3,
                 maxZoom: 3
             }});
-            
-            setTimeout(function() {{ cy.fit(); }}, 100);
+
+                // Store reference (for backward compatibility with buttons)
+                window.cy = cy;
+                window.cy_{self.container_id.replace('-', '_')} = cy;
+
+                console.log('[{self.container_id}] Cytoscape initialized successfully');
+                setTimeout(function() {{ cy.fit(); }}, 100);
+            }} catch (error) {{
+                console.error('[{self.container_id}] Error initializing Cytoscape:', error);
+                var container = document.getElementById('{self.container_id}');
+                if (container) {{
+                    container.innerHTML = '<div style="padding:20px;color:red;">Error: ' + error.message + '</div>';
+                }}
+            }}
         }})();
         </script>
         '''
@@ -181,21 +200,29 @@ class CytoscapeTree:
         ui.run_javascript("if(window.cy)cy.zoom(cy.zoom()*0.7)")
     
     def _build_graph_data(self, persons) -> str:
-        """Build Cytoscape elements from CRM V2 persons."""
+        """
+        Build Cytoscape elements using multi-storage bridge approach.
+
+        Architecture:
+        - Nodes: CRM V2 (person details, profiles)
+        - Edges: GraphLite (relationship graph)
+
+        This bridges both systems for optimal visualization.
+        """
         elements = []
         added_edges = set()
 
-        # Build mapping from CRM V2 person ID to legacy PersonStore ID for relationships
-        person_id_map = {}  # crm_v2_id -> legacy_person_store_id
+        # Build CRM ID -> GraphLite ID mapping by name
+        crm_to_graph_id = {}
         for p in persons:
             if p.is_archived:
                 continue
-            # Find matching person in legacy PersonStore by name
-            legacy_person = self._find_in_person_store(p.full_name)
-            if legacy_person:
-                person_id_map[p.id] = legacy_person.id
+            # Find in GraphLite by name
+            matches = self.person_store.find_by_name(p.full_name)
+            if matches:
+                crm_to_graph_id[p.id] = matches[0].id
 
-        # Build nodes from CRM V2 persons
+        # Build nodes from CRM V2 persons (rich profile data)
         for p in persons:
             if p.is_archived:
                 continue
@@ -209,17 +236,21 @@ class CytoscapeTree:
                 }
             })
 
-            # Get legacy ID for relationship lookups
-            legacy_id = person_id_map.get(p.id)
-            if not legacy_id:
+        # Add relationship edges from GraphLite (optimized graph traversal)
+        for p in persons:
+            if p.is_archived:
                 continue
 
-            # Add relationship edges using legacy IDs
+            graph_id = crm_to_graph_id.get(p.id)
+            if not graph_id:
+                continue
+
             try:
-                children = self.family_graph.get_children(legacy_id)
-                for child_legacy_id in children:
-                    # Find CRM V2 person with this legacy ID
-                    child_crm_id = self._find_crm_id_by_legacy(child_legacy_id, person_id_map)
+                # Get children from GraphLite
+                children_graph_ids = self.family_graph.get_children(graph_id)
+                for child_graph_id in children_graph_ids:
+                    # Find CRM ID from GraphLite ID
+                    child_crm_id = self._find_crm_id_by_graph_id(child_graph_id, crm_to_graph_id)
                     if child_crm_id:
                         key = (p.id, child_crm_id, "pc")
                         if key not in added_edges:
@@ -232,13 +263,14 @@ class CytoscapeTree:
                                 }
                             })
                             added_edges.add(key)
-            except:
+            except Exception:
                 pass
 
             try:
-                spouses = self.family_graph.get_spouse(legacy_id)
-                for spouse_legacy_id in spouses:
-                    spouse_crm_id = self._find_crm_id_by_legacy(spouse_legacy_id, person_id_map)
+                # Get spouses from GraphLite
+                spouses_graph_ids = self.family_graph.get_spouse(graph_id)
+                for spouse_graph_id in spouses_graph_ids:
+                    spouse_crm_id = self._find_crm_id_by_graph_id(spouse_graph_id, crm_to_graph_id)
                     if spouse_crm_id:
                         key = tuple(sorted([p.id, spouse_crm_id])) + ("sp",)
                         if key not in added_edges:
@@ -251,13 +283,14 @@ class CytoscapeTree:
                                 }
                             })
                             added_edges.add(key)
-            except:
+            except Exception:
                 pass
 
             try:
-                siblings = self.family_graph.get_siblings(legacy_id)
-                for sibling_legacy_id in siblings:
-                    sibling_crm_id = self._find_crm_id_by_legacy(sibling_legacy_id, person_id_map)
+                # Get siblings from GraphLite
+                siblings_graph_ids = self.family_graph.get_siblings(graph_id)
+                for sibling_graph_id in siblings_graph_ids:
+                    sibling_crm_id = self._find_crm_id_by_graph_id(sibling_graph_id, crm_to_graph_id)
                     if sibling_crm_id:
                         key = tuple(sorted([p.id, sibling_crm_id])) + ("sib",)
                         if key not in added_edges:
@@ -270,10 +303,17 @@ class CytoscapeTree:
                                 }
                             })
                             added_edges.add(key)
-            except:
+            except Exception:
                 pass
 
         return json.dumps(elements)
+
+    def _find_crm_id_by_graph_id(self, graph_id: int, crm_to_graph_map: dict) -> Optional[int]:
+        """Find CRM V2 ID given GraphLite ID."""
+        for crm_id, gid in crm_to_graph_map.items():
+            if gid == graph_id:
+                return crm_id
+        return None
 
     def _find_in_person_store(self, full_name: str):
         """Find person in legacy PersonStore by name."""

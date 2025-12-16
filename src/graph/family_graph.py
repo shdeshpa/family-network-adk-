@@ -114,3 +114,40 @@ class FamilyGraph:
             "grandparents": self.get_grandparents(person_id),
             "grandchildren": self.get_grandchildren(person_id)
         }
+
+    def delete_person_relationships(self, person_id: int) -> bool:
+        """Delete all relationships for a person before removing them.
+
+        This prevents dangling edges in the graph that would break tree visualization.
+        """
+        try:
+            with self.graph.transaction() as tr:
+                # Get all related persons first
+                children = self.get_children(person_id)
+                parents = self.get_parents(person_id)
+                spouses = self.get_spouse(person_id)
+                siblings = self.get_siblings(person_id)
+
+                # Delete parent-child edges (both directions)
+                for child_id in children:
+                    tr.delete(V(person_id).parent_of(child_id))
+                    tr.delete(V(child_id).child_of(person_id))
+
+                for parent_id in parents:
+                    tr.delete(V(person_id).child_of(parent_id))
+                    tr.delete(V(parent_id).parent_of(person_id))
+
+                # Delete spouse edges (both directions)
+                for spouse_id in spouses:
+                    tr.delete(V(person_id).spouse_of(spouse_id))
+                    tr.delete(V(spouse_id).spouse_of(person_id))
+
+                # Delete sibling edges (both directions)
+                for sibling_id in siblings:
+                    tr.delete(V(person_id).sibling_of(sibling_id))
+                    tr.delete(V(sibling_id).sibling_of(person_id))
+
+            return True
+        except Exception as e:
+            print(f"Error deleting relationships for person {person_id}: {e}")
+            return False

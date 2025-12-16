@@ -12,12 +12,13 @@ import asyncio
 
 from src.agents.adk.transcription_agent import TranscriptionAgent
 from src.agents.adk.extraction_agent import ExtractionAgent
+from src.agents.adk.relation_expert_agent import RelationExpertAgent
 from src.agents.adk.graph_agent import GraphAgent
 from src.agents.adk.storage_agent import StorageAgent
 
 
 class FamilyOrchestrator:
-    """Coordinates agents: Transcription → Extraction → Storage → Graph."""
+    """Coordinates agents: Transcription → Extraction → RelationExpert → Storage → Graph."""
 
     def __init__(self, llm_provider: str = "ollama/llama3"):
         """
@@ -28,6 +29,7 @@ class FamilyOrchestrator:
         """
         self.transcription_agent = TranscriptionAgent()
         self.extraction_agent = ExtractionAgent(model_id=llm_provider)
+        self.relation_expert_agent = RelationExpertAgent()
         self.storage_agent = StorageAgent()
         self.graph_agent = GraphAgent()
     
@@ -71,10 +73,10 @@ class FamilyOrchestrator:
             "languages_detected": extraction.languages_detected
         }
 
-        # Step 2: Store in CRM V2
-        result["steps"].append({"agent": "storage", "status": "running"})
+        # Step 2: RelationExpert - Duplicate detection and resolution
+        result["steps"].append({"agent": "relation_expert", "status": "running"})
 
-        # Convert extraction result to dict for storage agent
+        # Convert extraction result to dict for relation expert
         extraction_dict = {
             "success": extraction.success,
             "persons": [
@@ -103,21 +105,51 @@ class FamilyOrchestrator:
             ]
         }
 
-        storage_result = await self.storage_agent.store(extraction_dict)
+        relation_expert_result = await self.relation_expert_agent.process(extraction_dict)
+
+        result["steps"][-1]["status"] = "done"
+        result["relation_expert"] = {
+            "success": relation_expert_result.success,
+            "merges": len(relation_expert_result.merges),
+            "auto_merged": len([m for m in relation_expert_result.merges if m.get('action') == 'auto_merge']),
+            "needs_clarification": len([m for m in relation_expert_result.merges if m.get('action') == 'needs_clarification']),
+            "summary": relation_expert_result.summary
+        }
+
+        # Use cleaned data from relation expert for storage
+        extraction_dict_cleaned = {
+            "success": True,
+            "persons": relation_expert_result.persons,
+            "relationships": relation_expert_result.relationships
+        }
+
+        # Step 3: Store in CRM V2
+        result["steps"].append({"agent": "storage", "status": "running"})
+
+        # Use cleaned data from relation expert
+        storage_result = await self.storage_agent.store(extraction_dict_cleaned)
 
         result["steps"][-1]["status"] = "done" if storage_result.success else "failed"
         result["storage"] = {
             "success": storage_result.success,
             "families_created": len(storage_result.families_created),
             "persons_created": len(storage_result.persons_created),
+            "duplicates_skipped": [
+                {
+                    "name": d.name,
+                    "existing_id": d.existing_id,
+                    "existing_name": d.existing_name,
+                    "reason": d.reason
+                } for d in storage_result.duplicates_skipped
+            ],
             "errors": storage_result.errors,
             "summary": storage_result.summary
         }
 
-        # Step 3: Build graph (legacy - still maintain for compatibility)
+        # Step 4: Build graph (legacy - still maintain for compatibility)
         result["steps"].append({"agent": "graph", "status": "running"})
 
-        graph_result = self.graph_agent.build_from_extraction(extraction_dict)
+        graph_result = self.graph_agent.build_from_extraction(extraction_dict_cleaned)
 
         result["steps"][-1]["status"] = "done"
         result["graph"] = graph_result
@@ -125,6 +157,7 @@ class FamilyOrchestrator:
         result["success"] = True
         result["summary"] = (
             f"Extracted {len(extraction.persons)} people, {len(extraction.relationships)} relationships. "
+            f"RelationExpert: {relation_expert_result.summary}. "
             f"Storage: {storage_result.summary}. "
             f"Graph: {len(graph_result.get('persons_created', []))} persons."
         )

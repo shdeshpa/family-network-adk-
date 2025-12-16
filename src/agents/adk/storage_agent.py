@@ -1,12 +1,13 @@
 """
-Storage Agent - Stores extracted family data into CRM V2.
+Storage Agent - Multi-storage orchestrator for family data.
 
-This agent takes extraction results and stores them using the CRM MCP server.
-It handles:
-- Family creation/lookup
-- Person profile creation
-- Linking persons to families
-- Intelligent family grouping by surname and city
+This agent coordinates storage across multiple systems:
+1. GraphLite (FamilyGraph) - Relationship graph for tree visualization
+2. CRM V2 (SQLite) - Structured relational data (profiles, donations, events)
+3. Qdrant (Future) - Vector storage for semantic search of text blocks
+
+Architecture:
+    Extraction → Storage Agent → GraphLite + CRM V2 + Qdrant
 
 Author: Shrinivas Deshpande
 Date: December 6, 2025
@@ -14,11 +15,14 @@ Copyright (c) 2025 Shrinivas Deshpande. All rights reserved.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, List
+from typing import Optional, List, Dict
 import asyncio
 from collections import defaultdict
 
 from src.mcp.client import call_crm_tool
+from src.graph.family_graph import FamilyGraph
+from src.graph.person_store import PersonStore
+from src.graph.crm_store_v2 import CRMStoreV2
 
 
 @dataclass
@@ -40,24 +44,49 @@ class StoredFamily:
 
 
 @dataclass
+class DuplicatePerson:
+    """Person identified as duplicate."""
+    name: str
+    existing_id: int
+    existing_name: str
+    reason: str
+
+
+@dataclass
 class StorageResult:
     """Result from storage agent."""
     success: bool = True
     families_created: List[StoredFamily] = field(default_factory=list)
     persons_created: List[StoredPerson] = field(default_factory=list)
+    duplicates_skipped: List[DuplicatePerson] = field(default_factory=list)
     errors: List[str] = field(default_factory=list)
     summary: str = ""
 
 
 class StorageAgent:
-    """Agent that stores extracted family data into CRM V2."""
+    """
+    Multi-storage orchestrator for family data.
+
+    Coordinates storage across:
+    1. GraphLite (FamilyGraph) - Relationship graph
+    2. CRM V2 (SQLite) - Structured relational data
+    3. Qdrant (Future) - Vector storage for semantic search
+    """
 
     def __init__(self):
-        pass
+        self.family_graph = FamilyGraph()
+        self.person_store = PersonStore()
+        self.crm_store = CRMStoreV2()
+        self.name_to_graph_id: Dict[str, int] = {}  # Track name -> GraphLite person ID
 
     async def store(self, extraction: dict) -> StorageResult:
         """
-        Store extraction results in CRM V2.
+        Store extraction results across multiple storage systems.
+
+        Storage Pipeline:
+        1. GraphLite (FamilyGraph) - Persons + relationships for graph queries
+        2. CRM V2 (SQLite) - Structured profiles, donations, events
+        3. Qdrant (Future) - Raw text blocks for semantic search
 
         Args:
             extraction: Dict with 'persons' and 'relationships' keys
@@ -82,14 +111,56 @@ class StorageAgent:
             return result
 
         try:
-            # Step 1: Group persons by family using relationships
-            family_groups, person_to_family_key = self._group_by_family_smart(persons, relationships)
+            # STEP 0: Separate duplicates from new persons
+            new_persons = []
+            for person in persons:
+                if person.get("existing_id"):
+                    # This is a duplicate - don't store, just record it
+                    existing_id = person["existing_id"]
+                    result.duplicates_skipped.append(DuplicatePerson(
+                        name=person.get("name", "Unknown"),
+                        existing_id=existing_id,
+                        existing_name=person.get("name", "Unknown"),
+                        reason=f"Auto-merged with existing person #{existing_id} (high similarity)"
+                    ))
+                    print(f"[StorageAgent] SKIPPING duplicate: {person.get('name')} (existing #{existing_id})")
+                else:
+                    # This is a new person - store it
+                    new_persons.append(person)
 
-            # Step 2: Create or find families
+            # If all persons are duplicates, we still need to store relationships
+            if not new_persons:
+                # No new persons to create, but we may have relationships to store
+                print(f"[StorageAgent] All persons are duplicates. Storing relationships only...")
+
+                # Store relationships (for quick CRM queries)
+                await self._store_relationships_crm(relationships, result)
+
+                # Also store relationships in GraphLite
+                self._store_in_graphlite([], relationships, result)
+
+                result.success = True
+                result.summary = self._generate_summary(result)
+                return result
+
+            # TOOL 1: Populate GraphLite (FamilyGraph) for tree visualization - ONLY new persons
+            self._store_in_graphlite(new_persons, relationships, result)
+
+            # TOOL 2: Populate CRM V2 (SQLite) for structured queries - ONLY new persons
+            # Step 2a: Group persons by family
+            family_groups, person_to_family_key = self._group_by_family_smart(new_persons, relationships)
+
+            # Step 2b: Create or find families
             family_map = await self._ensure_families(family_groups, result)
 
-            # Step 3: Store person profiles
-            await self._store_persons(persons, family_map, person_to_family_key, result)
+            # Step 2c: Store person profiles
+            await self._store_persons(new_persons, family_map, person_to_family_key, result)
+
+            # Step 2d: Store relationships (for quick CRM queries)
+            await self._store_relationships_crm(relationships, result)
+
+            # TOOL 3: Populate Qdrant (Future)
+            # await self._store_in_qdrant(raw_text, result)
 
             # Generate summary
             result.summary = self._generate_summary(result)
@@ -120,10 +191,12 @@ class StorageAgent:
         for person in persons:
             if person.get("is_speaker"):
                 speaker = person
-                name = person.get("name", "")
-                name_parts = name.strip().split()
+                name = person.get("name") or ""
+                name = name.strip() if isinstance(name, str) else ""
+                name_parts = name.split()
                 speaker_surname = name_parts[-1] if name_parts else "Unknown"
-                speaker_city = person.get("location", "").strip() or "Unknown"
+                location = person.get("location") or ""
+                speaker_city = location.strip() if isinstance(location, str) and location else "Unknown"
                 break
 
         # Build a relationship graph to find connected people
@@ -141,14 +214,15 @@ class StorageAgent:
         speaker_group_key = None
 
         for person in persons:
-            name = person.get("name", "")
+            name = person.get("name") or ""
+            name = name.strip() if isinstance(name, str) else ""
             if not name:
                 continue
 
-            name_parts = name.strip().split()
+            name_parts = name.split()
             surname = name_parts[-1] if name_parts else "Unknown"
-            location = person.get("location", "")
-            city = location.strip() if location else "Unknown"
+            location = person.get("location") or ""
+            city = location.strip() if isinstance(location, str) and location else "Unknown"
 
             # If this person is connected to the speaker, use speaker's family
             if speaker and speaker_surname:
@@ -183,18 +257,19 @@ class StorageAgent:
         person_to_family_key = {}
 
         for person in persons:
-            name = person.get("name", "")
-            location = person.get("location", "")
+            name = person.get("name") or ""
+            name = name.strip() if isinstance(name, str) else ""
+            location = person.get("location") or ""
 
             if not name:
                 continue
 
             # Extract surname (assume last part of name)
-            name_parts = name.strip().split()
+            name_parts = name.split()
             surname = name_parts[-1] if name_parts else "Unknown"
 
             # Use location as city (default to "Unknown" if missing)
-            city = location.strip() if location else "Unknown"
+            city = location.strip() if isinstance(location, str) and location else "Unknown"
 
             family_key = (surname, city)
             groups[family_key].append(person)
@@ -265,20 +340,28 @@ class StorageAgent:
                 if not name:
                     continue
 
+                # Handle None values safely
+                name = name.strip() if name else ""
+                if not name:
+                    continue
+
                 # Extract name components
-                name_parts = name.strip().split()
+                name_parts = name.split()
                 first_name = name_parts[0] if name_parts else name
                 last_name = " ".join(name_parts[1:]) if len(name_parts) > 1 else ""
 
-                # Get location
-                location = person_data.get("location", "")
+                # Get location (handle None)
+                location = person_data.get("location") or ""
                 city = location.strip() if location else "Unknown"
 
                 # Get family code from the person-to-family mapping
                 family_key = person_to_family_key.get(name)
                 family_code = family_map.get(family_key, "") if family_key else ""
 
-                # Check if person already exists
+                # Note: Duplicates are now filtered out BEFORE this function is called
+                # So we no longer need to check for existing_id here
+
+                # Check if person already exists (fallback search for safety)
                 search_result = await call_crm_tool("search_persons", {
                     "query": name,
                     "family_code": family_code
@@ -290,6 +373,7 @@ class StorageAgent:
                     person_id = existing_person.get("person_id", 0)
 
                     if person_id:
+                        print(f"[StorageAgent] Found existing person #{person_id}: {name}")
                         result.persons_created.append(StoredPerson(
                             person_id=person_id,
                             name=name,
@@ -349,11 +433,211 @@ class StorageAgent:
             except Exception as e:
                 result.errors.append(f"Person storage error for {person_data.get('name', 'unknown')}: {str(e)}")
 
+    def _store_in_graphlite(self, persons: list, relationships: list, result: StorageResult):
+        """
+        TOOL 1: Store persons and relationships in GraphLite for tree visualization.
+
+        GraphLite (FamilyGraph + PersonStore) is optimized for:
+        - Graph traversal
+        - Relationship queries
+        - Tree visualization
+        """
+        self.name_to_graph_id.clear()
+
+        # Step 1: Add persons to PersonStore
+        for person_data in persons:
+            try:
+                name = person_data.get("name", "")
+                if not name:
+                    continue
+
+                # Check if person already exists
+                existing = self.person_store.find_by_name(name)
+                if existing:
+                    # Use existing person
+                    self.name_to_graph_id[name] = existing[0].id
+                    continue
+
+                # Create new person in PersonStore
+                from src.models import Person
+                location = person_data.get("location", "")
+
+                person_obj = Person(
+                    name=name,
+                    location=location,
+                    gender=person_data.get("gender"),
+                    interests=person_data.get("interests", "").split(",") if person_data.get("interests") else []
+                )
+                person_id = self.person_store.add_person(person_obj)
+                self.name_to_graph_id[name] = person_id
+
+            except Exception as e:
+                result.errors.append(f"GraphLite person storage error for {person_data.get('name')}: {str(e)}")
+
+        # Step 2: Add relationships to FamilyGraph
+        for rel_data in relationships:
+            try:
+                person1_name = rel_data.get("person1", "")
+                person2_name = rel_data.get("person2", "")
+                relation_term = rel_data.get("relation_term", "").lower()
+
+                if not person1_name or not person2_name:
+                    continue
+
+                # Get GraphLite IDs - check newly created persons first
+                person1_id = self.name_to_graph_id.get(person1_name)
+                person2_id = self.name_to_graph_id.get(person2_name)
+
+                # If person not found in current batch, search in PersonStore for existing person
+                if not person1_id:
+                    existing = self.person_store.find_by_name(person1_name)
+                    if existing:
+                        person1_id = existing[0].id
+                        self.name_to_graph_id[person1_name] = person1_id  # Cache for future lookups
+
+                if not person2_id:
+                    existing = self.person_store.find_by_name(person2_name)
+                    if existing:
+                        person2_id = existing[0].id
+                        self.name_to_graph_id[person2_name] = person2_id  # Cache for future lookups
+
+                if not person1_id or not person2_id:
+                    print(f"[StorageAgent] Skipping GraphLite relationship {person1_name} -> {person2_name}: Person not found")
+                    continue
+
+                # Add relationship to FamilyGraph based on term
+                if relation_term in {"wife", "husband", "spouse", "bayko", "navra", "pati", "patni"}:
+                    self.family_graph.add_spouse(person1_id, person2_id)
+                elif relation_term in {"son", "daughter", "child", "mulga", "mulgi"}:
+                    # person1 has son/daughter person2 -> person1 is parent of person2
+                    self.family_graph.add_parent_child(person1_id, person2_id)
+                elif relation_term in {"father", "mother", "parent"}:
+                    # person1 has father/mother person2 -> person2 is parent of person1
+                    self.family_graph.add_parent_child(person2_id, person1_id)
+                elif relation_term in {"brother", "sister", "sibling", "bhau", "bhai", "behen"}:
+                    self.family_graph.add_sibling(person1_id, person2_id)
+
+                print(f"[StorageAgent] Created GraphLite relationship: {person1_name} ({person1_id}) --{relation_term}--> {person2_name} ({person2_id})")
+
+            except Exception as e:
+                result.errors.append(f"GraphLite relationship storage error: {str(e)}")
+
+    async def _store_relationships_crm(self, relationships: list, result: StorageResult):
+        """
+        TOOL 2d: Store relationships in CRM V2 for quick SQL queries.
+
+        This duplicates relationships in SQL for:
+        - Fast relational queries
+        - Reporting and analytics
+        - Data integrity constraints
+        """
+        if not relationships:
+            return
+
+        # Build a name-to-ID mapping from stored persons
+        name_to_id = {}
+        for stored_person in result.persons_created:
+            name_to_id[stored_person.name] = stored_person.person_id
+
+        for rel_data in relationships:
+            try:
+                person1_name = rel_data.get("person1", "")
+                person2_name = rel_data.get("person2", "")
+                relation_term = rel_data.get("relation_term", "")
+                relation_type = rel_data.get("relation_type", "")
+
+                if not person1_name or not person2_name:
+                    continue
+
+                # Get person IDs - check newly created persons first
+                person1_id = name_to_id.get(person1_name)
+                person2_id = name_to_id.get(person2_name)
+
+                # If person not found in current batch, search in CRM for existing person
+                if not person1_id:
+                    # Use CRM store directly (search_persons MCP tool is broken)
+                    all_persons = self.crm_store.get_all()
+                    matches = [p for p in all_persons if p.full_name == person1_name]
+                    if matches:
+                        person1_id = matches[0].id
+                        name_to_id[person1_name] = person1_id  # Cache for future lookups
+                        print(f"[StorageAgent] Found existing person in CRM: {person1_name} (ID: {person1_id})")
+
+                if not person2_id:
+                    # Use CRM store directly (search_persons MCP tool is broken)
+                    all_persons = self.crm_store.get_all()
+                    matches = [p for p in all_persons if p.full_name == person2_name]
+                    if matches:
+                        person2_id = matches[0].id
+                        name_to_id[person2_name] = person2_id  # Cache for future lookups
+                        print(f"[StorageAgent] Found existing person in CRM: {person2_name} (ID: {person2_id})")
+
+                if not person1_id or not person2_id:
+                    # Person not found in this extraction batch or CRM database
+                    print(f"[StorageAgent] Skipping relationship {person1_name} -> {person2_name}: Person not found")
+                    continue
+
+                # Map relation_type if not provided
+                if not relation_type:
+                    relation_type = self._infer_relation_type(relation_term)
+
+                # Store relationship via MCP tool
+                await call_crm_tool("add_relationship", {
+                    "person1_id": person1_id,
+                    "person2_id": person2_id,
+                    "relation_type": relation_type,
+                    "relation_term": relation_term
+                })
+
+                print(f"[StorageAgent] Created relationship: {person1_name} ({person1_id}) --{relation_term}--> {person2_name} ({person2_id})")
+
+            except Exception as e:
+                result.errors.append(f"CRM relationship storage error: {str(e)}")
+
+    def _infer_relation_type(self, relation_term: str) -> str:
+        """Infer relation_type from relation_term."""
+        term_lower = relation_term.lower()
+
+        spouse_terms = {"wife", "husband", "spouse", "bayko", "navra", "pati", "patni"}
+        parent_child_terms = {"son", "daughter", "child", "father", "mother", "parent", "mulga", "mulgi"}
+        sibling_terms = {"brother", "sister", "sibling", "bhau", "bhai", "behen"}
+        friend_terms = {"friend"}
+        colleague_terms = {"colleague", "coworker", "boss", "manager", "employee"}
+        fan_terms = {"fan", "fan of", "follower", "admirer"}
+        mentor_terms = {"mentor", "mentee", "teacher", "student"}
+        neighbor_terms = {"neighbor"}
+        roommate_terms = {"roommate"}
+        classmate_terms = {"classmate"}
+
+        if term_lower in spouse_terms:
+            return "spouse"
+        elif term_lower in parent_child_terms:
+            return "parent_child"
+        elif term_lower in sibling_terms:
+            return "sibling"
+        elif term_lower in friend_terms:
+            return "friend_of"
+        elif term_lower in colleague_terms:
+            return "colleague"
+        elif term_lower in fan_terms:
+            return "fan_of"
+        elif term_lower in mentor_terms:
+            return "mentor"
+        elif term_lower in neighbor_terms:
+            return "neighbor"
+        elif term_lower in roommate_terms:
+            return "roommate"
+        elif term_lower in classmate_terms:
+            return "classmate"
+        else:
+            return "other"
+
     def _generate_summary(self, result: StorageResult) -> str:
         """Generate human-readable summary."""
         families_count = len(result.families_created)
         persons_new = sum(1 for p in result.persons_created if not p.existing)
         persons_existing = sum(1 for p in result.persons_created if p.existing)
+        duplicates_count = len(result.duplicates_skipped)
         errors_count = len(result.errors)
 
         parts = []
@@ -366,6 +650,9 @@ class StorageAgent:
 
         if persons_existing > 0:
             parts.append(f"Found {persons_existing} existing person(s)")
+
+        if duplicates_count > 0:
+            parts.append(f"Skipped {duplicates_count} duplicate(s)")
 
         if errors_count > 0:
             parts.append(f"{errors_count} error(s)")

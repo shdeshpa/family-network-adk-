@@ -653,16 +653,65 @@ def update_donation(
 def delete_donation(donation_id: int) -> dict:
     """
     Delete a donation.
-    
+
     Args:
         donation_id: ID of donation to delete
-        
+
     Returns:
         Success status
     """
     store = get_store()
     success = store.delete_donation(donation_id)
     return {"success": success}
+
+
+# =============================================================================
+# RELATIONSHIP TOOLS
+# =============================================================================
+
+@mcp.tool()
+def add_relationship(person1_id: int, person2_id: int,
+                    relation_type: str, relation_term: str = None) -> dict:
+    """
+    Add a relationship between two persons.
+
+    Args:
+        person1_id: ID of first person
+        person2_id: ID of second person
+        relation_type: Type of relationship (spouse, parent_child, sibling)
+        relation_term: Optional specific term (wife, husband, son, daughter, etc.)
+
+    Returns:
+        Relationship ID and success status
+    """
+    store = get_store()
+    relationship_id = store.add_relationship(
+        person1_id, person2_id, relation_type, relation_term
+    )
+    return {
+        "success": True,
+        "relationship_id": relationship_id
+    }
+
+
+@mcp.tool()
+def get_relationships(person_id: int) -> dict:
+    """
+    Get all relationships for a person.
+
+    Args:
+        person_id: ID of person
+
+    Returns:
+        List of relationships
+    """
+    store = get_store()
+    relationships = store.get_relationships(person_id)
+    return {
+        "success": True,
+        "count": len(relationships),
+        "relationships": relationships
+    }
 
 
 # =============================================================================

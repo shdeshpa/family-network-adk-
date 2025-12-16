@@ -97,6 +97,22 @@ class CRMStoreV2:
                 )
             """)
             
+            # Relationships table
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS relationships (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    person1_id INTEGER NOT NULL,
+                    person2_id INTEGER NOT NULL,
+                    relation_type TEXT NOT NULL,
+                    relation_term TEXT,
+                    notes TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
+                    FOREIGN KEY (person1_id) REFERENCES profiles(id) ON DELETE CASCADE,
+                    FOREIGN KEY (person2_id) REFERENCES profiles(id) ON DELETE CASCADE
+                )
+            """)
+
             # Indexes for common queries
             conn.execute("CREATE INDEX IF NOT EXISTS idx_profile_family_id ON profiles(family_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_profile_family_code ON profiles(family_code)")
@@ -106,6 +122,9 @@ class CRMStoreV2:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_donation_person ON donations(person_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_donation_cause ON donations(cause)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_donation_deity ON donations(deity)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_relationship_person1 ON relationships(person1_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_relationship_person2 ON relationships(person2_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_relationship_type ON relationships(relation_type)")
     
     # =========================================================================
     # PROFILE OPERATIONS (CRUD)
@@ -479,3 +498,84 @@ class CRMStoreV2:
     def get_donations(self, person_id: int) -> List[Donation]:
         """Convenience method for UI - wraps get_donations_for_person()."""
         return self.get_donations_for_person(person_id)
+
+    # =========================================================================
+    # RELATIONSHIP OPERATIONS
+    # =========================================================================
+
+    def add_relationship(self, person1_id: int, person2_id: int,
+                        relation_type: str, relation_term: str = None,
+                        notes: str = None) -> int:
+        """
+        Add a relationship between two persons.
+
+        Args:
+            person1_id: ID of first person
+            person2_id: ID of second person
+            relation_type: Type of relationship (spouse, parent_child, sibling)
+            relation_term: Specific term (wife, husband, son, daughter, etc.)
+            notes: Optional notes
+
+        Returns: ID of created relationship
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.execute("""
+                INSERT INTO relationships (
+                    person1_id, person2_id, relation_type, relation_term, notes
+                ) VALUES (?, ?, ?, ?, ?)
+            """, (person1_id, person2_id, relation_type, relation_term, notes))
+            return cursor.lastrowid
+
+    def get_relationships(self, person_id: int) -> List[dict]:
+        """
+        Get all relationships for a person.
+
+        Returns: List of dicts with relationship info
+        """
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("""
+                SELECT * FROM relationships
+                WHERE person1_id = ? OR person2_id = ?
+            """, (person_id, person_id)).fetchall()
+
+            return [dict(row) for row in rows]
+
+    def get_children(self, person_id: int) -> List[int]:
+        """Get IDs of all children of a person."""
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute("""
+                SELECT person2_id FROM relationships
+                WHERE person1_id = ? AND relation_type = 'parent_child'
+            """, (person_id,)).fetchall()
+            return [row[0] for row in rows]
+
+    def get_spouses(self, person_id: int) -> List[int]:
+        """Get IDs of all spouses of a person."""
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute("""
+                SELECT person2_id FROM relationships
+                WHERE person1_id = ? AND relation_type = 'spouse'
+                UNION
+                SELECT person1_id FROM relationships
+                WHERE person2_id = ? AND relation_type = 'spouse'
+            """, (person_id, person_id)).fetchall()
+            return [row[0] for row in rows]
+
+    def get_siblings(self, person_id: int) -> List[int]:
+        """Get IDs of all siblings of a person."""
+        with sqlite3.connect(self.db_path) as conn:
+            rows = conn.execute("""
+                SELECT person2_id FROM relationships
+                WHERE person1_id = ? AND relation_type = 'sibling'
+                UNION
+                SELECT person1_id FROM relationships
+                WHERE person2_id = ? AND relation_type = 'sibling'
+            """, (person_id, person_id)).fetchall()
+            return [row[0] for row in rows]
+
+    def delete_relationship(self, relationship_id: int) -> bool:
+        """Delete a relationship."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("DELETE FROM relationships WHERE id = ?", (relationship_id,))
+            return True

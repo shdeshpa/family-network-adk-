@@ -26,6 +26,7 @@ dependencies = [
     "sentence-transformers>=5.1.2",
     "litellm>=1.80.7",
     "openai-whisper>=20250625",
+    "pytz>=2024.1",
 ]
 
 [project.optional-dependencies]

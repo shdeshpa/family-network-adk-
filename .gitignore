@@ -67,3 +67,10 @@ run_ui_simple.py
 test_pipeline.py
 test_ui_minimal.py
 test_ui_simple.py
+test_*.py
+test_*.html
+
+# Debug and utility scripts
+check_relationships.py
+cleanup_all_data.py
+debug_tree_data.py

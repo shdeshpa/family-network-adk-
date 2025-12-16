@@ -56,12 +56,20 @@ class ExtractionResult:
     error: Optional[str] = None
 
 
-EXTRACTION_PROMPT = """Extract family information from the text below. Output ONLY a JSON object, no other text.
+EXTRACTION_PROMPT = """Extract family and social network information from the text below. Output ONLY a JSON object, no other text.
 
-The text may mix English with Hindi/Marathi/Tamil/Telugu. Recognize relationship terms:
-- wife, husband, son, daughter, brother, sister, father, mother
+The text may mix English with Hindi/Marathi/Tamil/Telugu. Recognize ALL relationship terms:
+
+FAMILY RELATIONSHIPS:
+- wife, husband, son, daughter, brother, sister, father, mother, grandfather, grandmother, uncle, aunt, cousin
 - Marathi: bhau (brother), bayko (wife), navra (husband), mulga (son), mulgi (daughter)
 - Hindi: bhai (brother), behen (sister), pati (husband), patni (wife)
+
+NON-FAMILY RELATIONSHIPS (IMPORTANT - Extract these too!):
+- friend, colleague, coworker, boss, manager, employee
+- mentor, mentee, teacher, student
+- fan (fan of someone), follower, admirer
+- neighbor, roommate, classmate
 
 Extract ALL available information for each person:
 - Name (required)
@@ -91,9 +99,17 @@ JSON format (output ONLY this, nothing else):
     }
   ],
   "relationships": [
-    {"person1": "Name1", "person2": "Name2", "relation_term": "wife"}
+    {"person1": "Name1", "person2": "Name2", "relation_term": "wife"},
+    {"person1": "Name3", "person2": "Name4", "relation_term": "colleague"},
+    {"person1": "Name5", "person2": "Name6", "relation_term": "fan of"}
   ]
 }
+
+CRITICAL: Extract ALL relationships mentioned in the text, including:
+- Family relationships (spouse, children, parents, siblings)
+- Professional relationships (colleague, boss, coworker)
+- Social relationships (friend, neighbor, classmate)
+- Fan/follower relationships (fan of, admirer of)
 
 IMPORTANT: Extract phone numbers, emails, and activities if mentioned in the text."""
 
