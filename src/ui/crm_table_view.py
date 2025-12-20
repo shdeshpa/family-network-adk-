@@ -7,7 +7,7 @@ from src.graph.models_v2 import PersonProfileV2
 from src.graph.person_store import PersonStore
 from src.graph.family_graph import FamilyGraph
 from src.models import Person
-from typing import List, Optional
+from typing import List, Optional, Callable
 from datetime import datetime
 import pytz
 
@@ -15,7 +15,7 @@ import pytz
 class CRMTableView:
     """Modern table view for CRM V2 data with sorting and filtering."""
 
-    def __init__(self):
+    def __init__(self, on_edit_person: Optional[Callable[[int], None]] = None):
         self.store = CRMStoreV2()
         self.registry = FamilyRegistry()
         self.person_store = PersonStore()  # GraphLite person store
@@ -24,6 +24,7 @@ class CRMTableView:
         self.filtered_persons: List[PersonProfileV2] = []
         self.table = None
         self.timezone = pytz.timezone('America/Los_Angeles')  # PST/PDT
+        self.on_edit_person = on_edit_person  # Callback for edit button
 
     def _format_timestamp_pst(self, iso_timestamp: str) -> str:
         """Convert ISO timestamp to PST formatted string."""
@@ -148,17 +149,15 @@ class CRMTableView:
                 pagination={"rowsPerPage": 25, "sortBy": "updated_at", "descending": True}
             ).classes("w-full")
 
-            # Add action buttons in a custom slot
+            # Add action buttons in a custom slot (removed View icon)
             self.table.add_slot('body-cell-actions', '''
                 <q-td :props="props">
-                    <q-btn flat dense size="sm" icon="visibility" @click="$parent.$emit('view', props.row)" />
                     <q-btn flat dense size="sm" icon="edit" @click="$parent.$emit('edit', props.row)" />
                     <q-btn flat dense size="sm" icon="delete" color="negative" @click="$parent.$emit('delete', props.row)" />
                 </q-td>
             ''')
 
             # Handle action button clicks
-            self.table.on('view', lambda e: self._view_person(e.args['id']))
             self.table.on('edit', lambda e: self._edit_person(e.args['id']))
             self.table.on('delete', lambda e: self._delete_person(e.args['id']))
 
@@ -296,11 +295,17 @@ class CRMTableView:
             ui.label(value).classes("text-sm")
 
     def _edit_person(self, person_id: int):
-        """Edit person details in a dialog."""
+        """Edit person details - use callback if provided, otherwise show inline dialog."""
         person = self.store.get_person(person_id)
         if not person:
             return
 
+        # If callback is provided, use PersonDetailView instead of inline dialog
+        if self.on_edit_person:
+            self.on_edit_person(person_id)
+            return
+
+        # Otherwise, show inline edit dialog (legacy behavior)
         with ui.dialog() as dialog, ui.card().classes("p-6 min-w-[600px] max-h-[80vh] overflow-auto"):
             ui.label(f"✏️ Edit {person.first_name} {person.last_name}").classes("text-xl font-bold mb-4")
 

@@ -3,11 +3,15 @@
 from nicegui import ui
 from typing import Optional
 import json
+import asyncio
+from pathlib import Path
 
 from src.graph.crm_store_v2 import CRMStoreV2
 from src.graph.family_registry import FamilyRegistry
 from src.graph.person_store import PersonStore
 from src.graph.family_graph import FamilyGraph
+from src.ui.audio_recorder import AudioRecorderUI
+from src.mcp.input_client import InputMCPClient
 
 
 class D3TreeView:
@@ -19,7 +23,8 @@ class D3TreeView:
         family_registry: FamilyRegistry = None,
         person_store: PersonStore = None,
         family_graph: FamilyGraph = None,
-        on_node_click=None
+        on_node_click=None,
+        on_view_in_crm=None
     ):
         # CRM V2 stores for person data
         self.crm_store = crm_store or CRMStoreV2()
@@ -28,7 +33,15 @@ class D3TreeView:
         self.person_store = person_store or PersonStore()
         self.family_graph = family_graph or FamilyGraph()
         self.on_node_click = on_node_click
+        self.on_view_in_crm = on_view_in_crm
         self.person_dialog = None
+
+        # Recording directory
+        self.recordings_dir = Path("data/recordings")
+        self.recordings_dir.mkdir(parents=True, exist_ok=True)
+
+        # MCP server URL
+        self.mcp_server_url = "http://localhost:8003"
 
     def render(self):
         """Render the D3.js tree view."""
@@ -546,6 +559,13 @@ class D3TreeView:
                     ui.label("Donation tracking coming soon...").classes("text-gray-500 p-4")
                     # Placeholder for future donation functionality
 
+            # Action buttons at bottom
+            ui.separator().classes("mt-4")
+            with ui.row().classes("w-full justify-end gap-2 mt-4"):
+                ui.button("Cancel", on_click=dialog.close).props("flat")
+                if self.on_view_in_crm:
+                    ui.button("✏️ Edit", on_click=lambda p=person, d=dialog: self._navigate_to_crm(p, d)).props("color=primary")
+
         dialog.open()
 
     def _detail_row(self, label: str, value: str):
@@ -711,3 +731,130 @@ class D3TreeView:
             if gid == graph_id:
                 return crm_id
         return None
+
+    def _navigate_to_crm(self, person, dialog):
+        """Navigate to CRM tab and open person editor."""
+        dialog.close()
+        if self.on_view_in_crm:
+            self.on_view_in_crm(person.id)
+
+    def _add_via_text(self, person, parent_dialog):
+        """Open text input dialog to add details about a person."""
+        # Close parent dialog
+        parent_dialog.close()
+
+        # Create new dialog
+        with ui.dialog() as text_dialog, ui.card().classes("w-full max-w-2xl"):
+            ui.label(f"Add Details via Text: {person.full_name}").classes("text-xl font-bold mb-4")
+
+            ui.label(f"Enter additional information about {person.full_name}:").classes("mb-2")
+
+            text_input = ui.textarea(
+                placeholder=f"Example: {person.full_name} loves gardening. His Nakshatra is Rohini. He is a friend of Rajesh Mehta..."
+            ).classes("w-full").props("rows=4")
+
+            results_container = ui.column().classes("w-full mt-4")
+
+            # Buttons
+            async def submit_text():
+                await self._process_text_for_person(
+                    text_input.value, person.id, person.full_name, text_dialog, results_container
+                )
+
+            with ui.row().classes("w-full justify-end gap-2 mt-4"):
+                ui.button("Cancel", on_click=text_dialog.close).props("flat")
+                ui.button("💾 Submit", on_click=submit_text).classes("bg-blue-500")
+
+        text_dialog.open()
+
+    def _add_via_audio(self, person, parent_dialog):
+        """Open audio recording dialog to add details about a person."""
+        # Close parent dialog
+        parent_dialog.close()
+
+        # Create async wrapper for audio processing
+        async def handle_audio(audio_bytes):
+            await self._process_audio_for_person(
+                audio_bytes, person.id, person.full_name, audio_dialog
+            )
+
+        # Create new dialog
+        with ui.dialog() as audio_dialog, ui.card().classes("w-full max-w-2xl"):
+            ui.label(f"Add Details via Audio: {person.full_name}").classes("text-xl font-bold mb-4")
+
+            ui.label(f"Speak about {person.full_name}:").classes("mb-2 text-lg")
+            ui.label("Press Record and speak additional details...").classes("mb-4 text-gray-600")
+
+            # Audio recorder
+            audio_recorder = AudioRecorderUI(on_audio_received=handle_audio)
+
+            # Buttons
+            with ui.row().classes("w-full justify-end gap-2 mt-4"):
+                ui.button("Cancel", on_click=audio_dialog.close).props("flat")
+
+        audio_dialog.open()
+
+    async def _process_text_for_person(self, text: str, person_id: int, person_name: str, dialog, results_container):
+        """Process text input for a specific person using MCP."""
+        if not text or not text.strip():
+            ui.notify("Please enter some text", type="warning")
+            return
+
+        try:
+            results_container.clear()
+            with results_container:
+                ui.label("Processing via MCP...").classes("text-blue-500")
+
+            # Call MCP server
+            async with InputMCPClient(self.mcp_server_url) as mcp_client:
+                result = await mcp_client.process_text_input(
+                    text=text,
+                    context_person_id=person_id,
+                    context_person_name=person_name
+                )
+
+            results_container.clear()
+            with results_container:
+                if result.get('success'):
+                    ui.label("✅ Details added successfully!").classes("text-green-600 font-bold")
+                    ui.notify(f"Details added for {person_name}!", type="positive")
+                    await asyncio.sleep(1)
+                    dialog.close()
+                    ui.notify("Click 'Refresh Tree' to see updates", type="info")
+                else:
+                    error_msg = result.get('error', 'Unknown error')
+                    ui.label(f"❌ Error: {error_msg}").classes("text-red-600")
+
+        except Exception as e:
+            results_container.clear()
+            with results_container:
+                ui.label(f"❌ Error: {str(e)}").classes("text-red-600")
+
+    async def _process_audio_for_person(self, audio_bytes: bytes, person_id: int, person_name: str, dialog):
+        """Process audio recording for a specific person using MCP."""
+        try:
+            ui.notify(f"Processing audio for {person_name} via MCP...", type="info")
+
+            # Save audio file
+            raw_path = self.recordings_dir / f"person_{person_id}_update.webm"
+            raw_path.write_bytes(audio_bytes)
+            audio_path_str = str(raw_path.absolute())
+
+            # Call MCP server
+            async with InputMCPClient(self.mcp_server_url) as mcp_client:
+                result = await mcp_client.process_audio_input(
+                    audio_file_path=audio_path_str,
+                    context_person_id=person_id,
+                    context_person_name=person_name
+                )
+
+            if result.get('success'):
+                ui.notify(f"Details added for {person_name}!", type="positive")
+                dialog.close()
+                ui.notify("Click 'Refresh Tree' to see updates", type="info")
+            else:
+                error_msg = result.get('error', 'Unknown error')
+                ui.notify(f"Error: {error_msg}", type="negative")
+
+        except Exception as e:
+            ui.notify(f"Error processing audio: {str(e)}", type="negative")

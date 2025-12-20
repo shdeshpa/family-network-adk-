@@ -389,8 +389,44 @@ class StorageAgent:
                 else:
                     mentions_str = str(raw_mentions)
 
-                # Extract interests/activities
+                # Extract and categorize interests/activities
                 interests = person_data.get("interests", "")
+
+                # Parse interests into categories
+                religious_interests = ""
+                spiritual_interests = ""
+                social_interests = ""
+                hobbies = ""
+
+                if interests:
+                    interests_lower = interests.lower()
+
+                    # Keywords for religious interests
+                    religious_keywords = ['temple', 'church', 'mosque', 'puja', 'prayer', 'religious', 'worship', 'devotional']
+                    # Keywords for spiritual interests
+                    spiritual_keywords = ['meditation', 'yoga', 'spirituality', 'mindfulness', 'mantra']
+                    # Keywords for social interests
+                    social_keywords = ['volunteer', 'community', 'service', 'charity', 'social', 'donation']
+
+                    # Split interests by comma or semicolon
+                    interest_items = [item.strip() for item in interests.replace(';', ',').split(',') if item.strip()]
+
+                    # Categorize each interest
+                    for item in interest_items:
+                        item_lower = item.lower()
+                        if any(keyword in item_lower for keyword in religious_keywords):
+                            religious_interests += (", " if religious_interests else "") + item
+                        elif any(keyword in item_lower for keyword in spiritual_keywords):
+                            spiritual_interests += (", " if spiritual_interests else "") + item
+                        elif any(keyword in item_lower for keyword in social_keywords):
+                            social_interests += (", " if social_interests else "") + item
+                        else:
+                            # Default to hobbies
+                            hobbies += (", " if hobbies else "") + item
+
+                    # If no categorization happened, put everything in hobbies
+                    if not (religious_interests or spiritual_interests or social_interests or hobbies):
+                        hobbies = interests
 
                 add_result = await call_crm_tool("add_person", {
                     "first_name": first_name,
@@ -401,7 +437,10 @@ class StorageAgent:
                     "email": person_data.get("email") or "",
                     "city": city,
                     "family_code": family_code,
-                    "hobbies": interests or "",  # Store interests in hobbies field
+                    "religious_interests": religious_interests,
+                    "spiritual_interests": spiritual_interests,
+                    "social_interests": social_interests,
+                    "hobbies": hobbies,
                     "notes": f"Created from extraction. Raw mentions: {mentions_str}"
                 })
 

@@ -9,12 +9,14 @@ Copyright (c) 2025 Shrinivas Deshpande. All rights reserved.
 from pathlib import Path
 from typing import Optional
 import asyncio
+import uuid
 
 from src.agents.adk.transcription_agent import TranscriptionAgent
 from src.agents.adk.extraction_agent import ExtractionAgent
 from src.agents.adk.relation_expert_agent import RelationExpertAgent
 from src.agents.adk.graph_agent import GraphAgent
 from src.agents.adk.storage_agent import StorageAgent
+from src.agents.adk.utils.agent_trajectory import TrajectoryLogger
 
 
 class FamilyOrchestrator:
@@ -27,6 +29,7 @@ class FamilyOrchestrator:
         Args:
             llm_provider: Model ID (e.g., "ollama/llama3", "groq/mixtral", "openai/gpt-4")
         """
+        self.llm_provider = llm_provider  # Store for creating agents with session_id
         self.transcription_agent = TranscriptionAgent()
         self.extraction_agent = ExtractionAgent(model_id=llm_provider)
         self.relation_expert_agent = RelationExpertAgent()
@@ -48,15 +51,22 @@ class FamilyOrchestrator:
 
     async def _process_text_async(self, text: str) -> dict:
         """Async implementation of text processing."""
+        # Generate session ID for trajectory tracking
+        session_id = str(uuid.uuid4())
+        TrajectoryLogger.start_session(session_id)
+
         result = {
             "success": False,
-            "steps": []
+            "steps": [],
+            "session_id": session_id
         }
 
-        # Step 1: Extract entities
+        # Step 1: Extract entities (with session_id for trajectory tracking)
         result["steps"].append({"agent": "extraction", "status": "running"})
 
-        extraction = self.extraction_agent.extract(text)
+        # Create extraction agent with session_id
+        extraction_agent = ExtractionAgent(model_id=self.llm_provider, session_id=session_id)
+        extraction = extraction_agent.extract(text)
 
         if not extraction.success:
             result["steps"][-1]["status"] = "failed"
@@ -153,6 +163,13 @@ class FamilyOrchestrator:
 
         result["steps"][-1]["status"] = "done"
         result["graph"] = graph_result
+
+        # NEW: Include detailed reasoning from graph agent (fuzzy matching, etc.)
+        result["detailed_reasoning"] = graph_result.get("detailed_reasoning", [])
+
+        # COLLECT ALL AGENT TRAJECTORIES for UI display
+        trajectories = TrajectoryLogger.get_session_trajectories(session_id)
+        result["agent_trajectories"] = [t.to_dict() for t in trajectories]
 
         result["success"] = True
         result["summary"] = (

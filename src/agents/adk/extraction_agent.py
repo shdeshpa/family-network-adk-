@@ -13,9 +13,11 @@ from dataclasses import dataclass, field
 from typing import Optional
 import json
 import re
+import uuid
 
 from src.agents.adk.utils.text_utils import TextUtils
 from src.agents.adk.utils.relationship_map import RelationshipMap
+from src.agents.adk.utils.agent_trajectory import TrajectoryLogger, StepType
 
 
 @dataclass
@@ -60,10 +62,19 @@ EXTRACTION_PROMPT = """Extract family and social network information from the te
 
 The text may mix English with Hindi/Marathi/Tamil/Telugu. Recognize ALL relationship terms:
 
-FAMILY RELATIONSHIPS:
+FAMILY RELATIONSHIPS (BE VERY CAREFUL - Extract the EXACT term used!):
 - wife, husband, son, daughter, brother, sister, father, mother, grandfather, grandmother, uncle, aunt, cousin
 - Marathi: bhau (brother), bayko (wife), navra (husband), mulga (son), mulgi (daughter)
 - Hindi: bhai (brother), behen (sister), pati (husband), patni (wife)
+
+CRITICAL RELATIONSHIP EXTRACTION RULES:
+1. Use the EXACT relationship term mentioned in the text
+2. "sister" means SISTER (sibling), NOT wife/spouse
+3. "brother" means BROTHER (sibling), NOT husband/spouse
+4. "wife"/"husband" are SPOUSE relationships, completely different from siblings
+5. If text says "X is sister of Y", extract relation_term as "sister"
+6. If text says "X is wife of Y", extract relation_term as "wife"
+7. NEVER confuse siblings (brother/sister) with spouses (wife/husband)
 
 NON-FAMILY RELATIONSHIPS (IMPORTANT - Extract these too!):
 - friend, colleague, coworker, boss, manager, employee
@@ -99,46 +110,147 @@ JSON format (output ONLY this, nothing else):
     }
   ],
   "relationships": [
-    {"person1": "Name1", "person2": "Name2", "relation_term": "wife"},
+    {"person1": "Name1", "person2": "Name2", "relation_term": "sister"},
     {"person1": "Name3", "person2": "Name4", "relation_term": "colleague"},
     {"person1": "Name5", "person2": "Name6", "relation_term": "fan of"}
   ]
 }
 
 CRITICAL: Extract ALL relationships mentioned in the text, including:
-- Family relationships (spouse, children, parents, siblings)
+- Family relationships (spouse, children, parents, siblings) - USE EXACT TERMS
 - Professional relationships (colleague, boss, coworker)
 - Social relationships (friend, neighbor, classmate)
 - Fan/follower relationships (fan of, admirer of)
 
-IMPORTANT: Extract phone numbers, emails, and activities if mentioned in the text."""
+IMPORTANT: Extract phone numbers, emails, and activities if mentioned in the text.
+
+VALIDATION: Before outputting, verify that:
+- "sister" is used for female siblings, NOT for wives
+- "brother" is used for male siblings, NOT for husbands
+- "wife" is used for female spouses, NOT for sisters
+- "husband" is used for male spouses, NOT for brothers"""
 
 
 class ExtractionAgent:
     """Agent that extracts family information from text."""
     
-    def __init__(self, model_id: str = "ollama/llama3"):
+    def __init__(self, model_id: str = "ollama/llama3", session_id: Optional[str] = None):
         self.model_id = model_id
         self.relationship_map = RelationshipMap()
         self.text_utils = TextUtils()
-    
+        self.session_id = session_id or str(uuid.uuid4())
+
     def extract(self, text: str) -> ExtractionResult:
-        """Extract persons and relationships from text."""
+        """Extract persons and relationships from text with ReAct pattern logging."""
+        # Create trajectory for this extraction
+        trajectory = TrajectoryLogger.create_trajectory("ExtractionAgent", self.session_id)
+
+        # OBSERVATION: Record what we received
+        trajectory.observe(
+            f"Received text input of {len(text)} characters",
+            {"text_preview": text[:200] if text else "", "text_length": len(text) if text else 0}
+        )
+
         if not text or not text.strip():
+            trajectory.reflect("Text is empty or whitespace only")
+            trajectory.error("Cannot extract from empty text")
+            trajectory.complete({"success": False, "error": "Empty text"})
             return ExtractionResult(
                 persons=[], relationships=[],
                 languages_detected=['english'],
                 raw_text=text, success=False, error="Empty text"
             )
-        
+
+        # REFLECTION: Analyze the input
         languages = self.text_utils.detect_language_hints(text)
-        
+        trajectory.reflect(
+            f"Detected languages: {', '.join(languages)}",
+            {"languages": languages}
+        )
+
         try:
+            # REASONING: Plan the extraction
+            trajectory.reason(
+                f"Planning extraction using {self.model_id} LLM",
+                {"model": self.model_id, "strategy": "JSON extraction with relationship validation"}
+            )
+
+            # ACTION: Call LLM for extraction
+            trajectory.act(
+                f"Calling LLM to extract persons and relationships",
+                {"model": self.model_id}
+            )
             llm_result = self._call_llm_sync(text)
+
+            # RESULT: Record LLM response
+            trajectory.result(
+                f"Received LLM response of {len(llm_result)} characters",
+                {"response_preview": llm_result[:300] if llm_result else ""}
+            )
+
+            # ACTION: Parse LLM response
+            trajectory.act("Parsing JSON response from LLM")
             persons, relationships, speaker = self._parse_llm_response(llm_result)
+
+            # RESULT: Record parsing results
+            trajectory.result(
+                f"Extracted {len(persons)} persons and {len(relationships)} relationships",
+                {
+                    "person_count": len(persons),
+                    "relationship_count": len(relationships),
+                    "speaker": speaker,
+                    "persons": [p.name for p in persons],
+                    "relationships": [{"person1": r.person1, "person2": r.person2, "term": r.relation_term} for r in relationships]
+                }
+            )
+
+            # REFLECTION: Validate extraction quality
+            validation_notes = []
+            for rel in relationships:
+                if rel.relation_term.lower() in ['sister', 'brother'] and 'wife' in rel.context.lower():
+                    validation_notes.append(f"WARNING: Possible confusion between sibling and spouse for {rel.person1}-{rel.person2}")
+
+            if validation_notes:
+                trajectory.reflect(
+                    "Validation concerns detected: " + "; ".join(validation_notes),
+                    {"validation_warnings": validation_notes}
+                )
+            else:
+                trajectory.reflect("Extraction quality looks good - no validation concerns")
+
+            # ACTION: Enhance persons with inferred data
+            trajectory.act("Enhancing person data (inferring gender, cleaning names)")
             persons = self._enhance_persons(persons)
+
+            # ACTION: Normalize relationship terms
+            trajectory.act("Normalizing relationship terms using RelationshipMap")
             relationships = self._normalize_relationships(relationships)
-            
+
+            # RESULT: Record final normalized relationships
+            normalized_info = [
+                {
+                    "person1": r.person1,
+                    "person2": r.person2,
+                    "original_term": r.relation_term,
+                    "normalized_term": r.normalized_term,
+                    "type": r.relation_type
+                }
+                for r in relationships
+            ]
+            trajectory.result(
+                f"Normalized {len(relationships)} relationships",
+                {"normalized_relationships": normalized_info}
+            )
+
+            # Complete trajectory
+            final_result = {
+                "success": True,
+                "persons_extracted": len(persons),
+                "relationships_extracted": len(relationships),
+                "languages": languages
+            }
+            trajectory.complete(final_result)
+
             return ExtractionResult(
                 persons=persons,
                 relationships=relationships,
@@ -148,6 +260,13 @@ class ExtractionAgent:
                 success=True
             )
         except Exception as e:
+            # ERROR: Record the error
+            trajectory.error(
+                f"Extraction failed: {str(e)}",
+                {"exception_type": type(e).__name__, "exception_message": str(e)}
+            )
+            trajectory.complete({"success": False, "error": str(e)})
+
             return ExtractionResult(
                 persons=[], relationships=[],
                 languages_detected=languages,
@@ -254,25 +373,34 @@ class ExtractionAgent:
         """Extract JSON object from text, handling common LLM quirks."""
         if not text:
             return None
-        
+
         # Method 1: Find JSON between braces
         # Find the first { and last }
         start = text.find('{')
         end = text.rfind('}')
-        
+
         if start == -1 or end == -1 or end <= start:
             return None
-        
+
         json_str = text[start:end + 1]
-        
+
         # Clean up common issues
+        # Fix missing values: "age": , -> "age": null,
+        json_str = re.sub(r':\s*,', ': null,', json_str)
+
+        # Fix missing values before closing brace: "age": } -> "age": null}
+        json_str = re.sub(r':\s*}', ': null}', json_str)
+
+        # Fix missing values before closing bracket: "age": ] -> "age": null]
+        json_str = re.sub(r':\s*]', ': null]', json_str)
+
         # Replace null (string) with null (json)
         json_str = re.sub(r':\s*null\s*([,}])', r': null\1', json_str)
-        
+
         # Remove trailing commas before } or ]
         json_str = re.sub(r',\s*}', '}', json_str)
         json_str = re.sub(r',\s*]', ']', json_str)
-        
+
         # Try to parse and fix incrementally
         try:
             json.loads(json_str)
@@ -326,7 +454,7 @@ class ExtractionAgent:
         return relationships
 
 
-def extract_from_text(text: str, model_id: str = "ollama/llama3") -> ExtractionResult:
+def extract_from_text(text: str, model_id: str = "ollama/llama3", session_id: Optional[str] = None) -> ExtractionResult:
     """Extract family information from text."""
-    agent = ExtractionAgent(model_id=model_id)
+    agent = ExtractionAgent(model_id=model_id, session_id=session_id)
     return agent.extract(text)

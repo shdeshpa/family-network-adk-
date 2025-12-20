@@ -17,6 +17,7 @@ from src.ui.audio_recorder import AudioRecorderUI
 from src.ui.d3_tree_view import D3TreeView
 from src.ui.crm_editor import CRMEditor
 from src.ui.crm_table_view import CRMTableView
+from src.ui.person_detail_view import PersonDetailView
 from src.graph.person_store import PersonStore
 from src.graph.family_graph import FamilyGraph
 from src.graph.crm_store import CRMStore
@@ -26,6 +27,7 @@ from src.graph.family_registry import FamilyRegistry
 from src.graph.crm_store_v2 import CRMStoreV2
 from src.agents.adk.orchestrator import FamilyOrchestrator
 from src.agents.adk.query_agent import QueryAgent
+from src.mcp.input_client import InputMCPClient
 
 
 executor = ThreadPoolExecutor(max_workers=2)
@@ -37,6 +39,9 @@ class FamilyNetworkApp:
     def __init__(self):
         self.recordings_dir = Path("data/recordings")
         self.recordings_dir.mkdir(parents=True, exist_ok=True)
+
+        # MCP server URL
+        self.mcp_server_url = "http://localhost:8003"
 
         # Legacy stores
         self.person_store = PersonStore()
@@ -279,20 +284,35 @@ class FamilyNetworkApp:
                     crm_store=self.crm_store_v2,
                     family_registry=self.family_registry,
                     person_store=self.person_store,
-                    family_graph=self.family_graph
+                    family_graph=self.family_graph,
+                    on_view_in_crm=self._open_person_in_crm
                 )
                 tree.render()
         except Exception as e:
+            self.tree_container.clear()
             with self.tree_container:
                 ui.label(f"Error rendering tree: {str(e)}").classes("text-red-500")
-    
+
     def _refresh_tree_view(self):
-        """Refresh the tree view."""
+        """Refresh the tree view by reloading the page."""
         try:
-            self._render_tree_view()
-            ui.notify("Tree refreshed", type="info")
+            # Reload the page to properly reinitialize the D3 tree
+            ui.run_javascript('window.location.reload();')
         except Exception as e:
             ui.notify(f"Error refreshing tree: {str(e)}", type="negative")
+
+    def _open_person_in_crm(self, person_id: int):
+        """Navigate to CRM tab and open PersonDetailView for editing."""
+        # Navigate to CRM tab
+        self.tabs.set_value(self.crm_tab)
+
+        # Open PersonDetailView
+        person = self.crm_store_v2.get_person(person_id)
+        if person:
+            self._open_person_detail(person_id)
+            ui.notify(f"Opening editor for {person.full_name}", type="info")
+        else:
+            ui.notify(f"Person with ID {person_id} not found", type="negative")
 
     async def _show_person_detail_dialog(self):
         """Show dialog to add details to a selected person."""
@@ -367,17 +387,13 @@ class FamilyNetworkApp:
             raw_path = self.recordings_dir / f"person_{person_id}_update.webm"
             raw_path.write_bytes(audio_bytes)
 
-            # Process with orchestrator, providing person context
-            loop = asyncio.get_event_loop()
-            audio_path_str = str(raw_path.absolute())
-
-            # Create context text to prepend to transcription
-            context = f"This is additional information about {person_name} (ID: {person_id}):"
-
-            result = await loop.run_in_executor(
-                None,
-                lambda: self.orchestrator.process_audio_file(audio_path_str)
-            )
+            # Use MCP client to process audio with person context
+            async with InputMCPClient(self.mcp_server_url) as mcp_client:
+                result = await mcp_client.process_audio_input(
+                    audio_file_path=str(raw_path.absolute()),
+                    context_person_id=person_id,
+                    context_person_name=person_name
+                )
 
             if result.get('success'):
                 ui.notify(f"Details added for {person_name}!", type="positive")
@@ -399,16 +415,15 @@ class FamilyNetworkApp:
         try:
             results_container.clear()
             with results_container:
-                ui.label("Processing...").classes("text-blue-500")
+                ui.label("Processing via MCP...").classes("text-blue-500")
 
-            # Add context to the text
-            context_text = f"This is about {person_name} (existing person): {text}"
-
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(
-                None,
-                lambda: self.orchestrator.process_text(context_text)
-            )
+            # Use MCP client to process text with person context
+            async with InputMCPClient(self.mcp_server_url) as mcp_client:
+                result = await mcp_client.process_text_input(
+                    text=text,
+                    context_person_id=person_id,
+                    context_person_name=person_name
+                )
 
             results_container.clear()
             with results_container:
@@ -429,8 +444,39 @@ class FamilyNetworkApp:
     
     def _setup_crm_tab(self):
         """Setup CRM tab with modern table view."""
-        crm_table = CRMTableView()
-        crm_table.render()
+        # Create container for CRM content (can switch between table view and person detail view)
+        self.crm_container = ui.column().classes("w-full h-full")
+        with self.crm_container:
+            self._render_crm_table()
+
+    def _render_crm_table(self):
+        """Render the CRM table view."""
+        # Store reference to CRM table view with edit callback
+        self.crm_table = CRMTableView(on_edit_person=self._open_person_detail)
+        self.crm_table.render()
+
+    def _open_person_detail(self, person_id: int):
+        """Open PersonDetailView for editing a person."""
+        # Clear CRM container and show PersonDetailView
+        self.crm_container.clear()
+        with self.crm_container:
+            person_detail = PersonDetailView(
+                person_id=person_id,
+                on_back=self._back_to_crm_table,
+                on_save=self._on_person_saved
+            )
+            person_detail.render()
+
+    def _back_to_crm_table(self):
+        """Return to CRM table view."""
+        self.crm_container.clear()
+        with self.crm_container:
+            self._render_crm_table()
+
+    def _on_person_saved(self):
+        """Callback after person is saved - refresh the table."""
+        # No need to do anything special, table will be refreshed when we go back
+        pass
     
     def _setup_chat_tab(self):
         ui.label("💬 Ask about your family").classes("text-xl font-bold mb-4")
@@ -452,9 +498,14 @@ class FamilyNetworkApp:
         try:
             raw_path = self.recordings_dir / "latest_raw.webm"
             raw_path.write_bytes(audio_bytes)
-            self._update_results("🎯 Processing...", self.results_container)
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(executor, self.orchestrator.process_audio, str(raw_path))
+            self._update_results("🎯 Processing via MCP...", self.results_container)
+
+            # Use MCP client to process audio
+            async with InputMCPClient(self.mcp_server_url) as mcp_client:
+                result = await mcp_client.process_audio_input(
+                    audio_file_path=str(raw_path.absolute())
+                )
+
             self._display_result(result, self.results_container)
             # Don't auto-navigate - let user review results first
             # if result.get("success"):
@@ -467,10 +518,14 @@ class FamilyNetworkApp:
         if not raw_path.exists():
             self._update_results("❌ No recording", self.results_container)
             return
-        self._update_results("🎯 Processing...", self.results_container)
+        self._update_results("🎯 Processing via MCP...", self.results_container)
         try:
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(executor, self.orchestrator.process_audio, str(raw_path))
+            # Use MCP client to process audio
+            async with InputMCPClient(self.mcp_server_url) as mcp_client:
+                result = await mcp_client.process_audio_input(
+                    audio_file_path=str(raw_path.absolute())
+                )
+
             self._display_result(result, self.results_container)
             # Don't auto-navigate - let user review results first
             # if result.get("success"):
@@ -484,15 +539,16 @@ class FamilyNetworkApp:
         if not text:
             self._update_results("❌ Enter text!", self.text_results_container)
             return
-        
+
         # Save to history
         entry_id = self.text_history.add_entry(text)
-        
-        self._update_results("🎯 Processing...", self.text_results_container)
-        
+
+        self._update_results("🎯 Processing via MCP...", self.text_results_container)
+
         try:
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(executor, self.orchestrator.process_text, text)
+            # Use MCP client to process text
+            async with InputMCPClient(self.mcp_server_url) as mcp_client:
+                result = await mcp_client.process_text_input(text=text)
 
             # Update history with results
             if result.get("success"):
@@ -650,6 +706,12 @@ class FamilyNetworkApp:
                         else:
                             ui.label("No relationships extracted").classes("text-gray-500")
 
+                # 🔍 AGENT TRAJECTORIES - Full ReAct pattern display
+                agent_trajectories = result.get("agent_trajectories", [])
+                if agent_trajectories:
+                    from src.ui.components.agent_trajectory_view import render_agent_trajectories
+                    render_agent_trajectories(agent_trajectories)
+
                 # Storage Summary
                 storage = result.get("storage", {})
                 if storage:
@@ -682,6 +744,52 @@ class FamilyNetworkApp:
                             with ui.expansion("⚠️ Warnings/Errors", icon="warning").classes("mt-2 text-orange-600"):
                                 for err in errors:
                                     ui.label(f"• {err}").classes("text-sm text-orange-700")
+
+                # Agent Reasoning Trails (Collapsible)
+                with ui.expansion("🧠 Agent Reasoning Trails (ReAct Pattern)", icon="psychology").classes("mt-4 w-full"):
+                    with ui.card().classes("w-full p-4"):
+                        ui.label("Agent Processing Chain").classes("font-bold mb-3 text-blue-700")
+
+                        # Show processing steps
+                        steps = result.get("steps", [])
+                        for i, step in enumerate(steps, 1):
+                            agent_name = step.get("agent", "unknown").upper()
+                            status = step.get("status", "unknown")
+                            status_icon = {"running": "⏳", "done": "✅", "failed": "❌"}.get(status, "•")
+                            status_color = {"running": "text-yellow-600", "done": "text-green-600", "failed": "text-red-600"}.get(status, "text-gray-600")
+
+                            with ui.column().classes("w-full mb-3 p-3 bg-gray-50 rounded"):
+                                ui.label(f"{i}. {agent_name}").classes("font-semibold text-sm mb-1")
+                                ui.label(f"{status_icon} Status: {status}").classes(f"text-xs {status_color}")
+
+                        # Show extraction details if available
+                        ext = result.get("extraction", {})
+                        if ext:
+                            ui.separator().classes("my-3")
+                            ui.label("Extraction Agent Details").classes("font-semibold text-sm mb-2")
+                            with ui.column().classes("text-xs text-gray-700 space-y-1"):
+                                ui.label(f"• Extracted {len(ext.get('persons', []))} person(s)")
+                                ui.label(f"• Found {len(ext.get('relationships', []))} relationship(s)")
+                                langs = ext.get("languages_detected", [])
+                                if langs:
+                                    ui.label(f"• Languages: {', '.join(langs)}")
+
+                        # Show relation expert details if available
+                        rel_expert = result.get("relation_expert", {})
+                        if rel_expert:
+                            ui.separator().classes("my-3")
+                            ui.label("Relation Expert Details").classes("font-semibold text-sm mb-2")
+                            with ui.column().classes("text-xs text-gray-700 space-y-1"):
+                                ui.label(f"• Auto-merged: {rel_expert.get('auto_merged', 0)} duplicate(s)")
+                                ui.label(f"• Needs clarification: {rel_expert.get('needs_clarification', 0)}")
+                                ui.label(f"• Total merges: {rel_expert.get('merges', 0)}")
+
+                        # 🔍 AGENT TRAJECTORIES - Full ReAct pattern display
+                        agent_trajectories = result.get("agent_trajectories", [])
+                        if agent_trajectories:
+                            ui.separator().classes("my-3")
+                            from src.ui.components.agent_trajectory_view import render_agent_trajectories
+                            render_agent_trajectories(agent_trajectories)
 
                 # Action Buttons
                 with ui.row().classes("gap-2 mt-4"):

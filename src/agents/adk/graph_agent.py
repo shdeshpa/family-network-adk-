@@ -15,14 +15,15 @@ class GraphAgent:
         """Build graph from extraction results."""
         if not extraction.get("success"):
             return {"success": False, "error": "Invalid extraction"}
-        
+
         results = {
             "success": True,
             "persons_created": [],
             "relationships_created": [],
-            "errors": []
+            "errors": [],
+            "detailed_reasoning": []  # NEW: Capture all reasoning steps
         }
-        
+
         for person_data in extraction.get("persons", []):
             name = person_data.get("name")
             if not name:
@@ -36,9 +37,12 @@ class GraphAgent:
             )
             if result.get("success"):
                 results["persons_created"].append(result)
+                # Add reasoning for person creation
+                results["detailed_reasoning"].append(f"✅ Added person: {name}")
             else:
                 results["errors"].append(f"Person {name}: {result.get('error')}")
-        
+                results["detailed_reasoning"].append(f"❌ Failed to add person {name}: {result.get('error')}")
+
         for rel in extraction.get("relationships", []):
             rel_type = rel.get("type")
             person1 = rel.get("person1")
@@ -48,9 +52,18 @@ class GraphAgent:
             result = add_relationship(person1, person2, rel_type)
             if result.get("success"):
                 results["relationships_created"].append(result)
+                # Capture detailed fuzzy matching reasoning
+                if "detailed_reasoning" in result:
+                    results["detailed_reasoning"].extend(result["detailed_reasoning"])
             else:
-                results["errors"].append(f"Relationship: {result.get('error')}")
-        
+                error_msg = result.get("error", "Unknown error")
+                results["errors"].append(f"Relationship: {error_msg}")
+                results["detailed_reasoning"].append(f"\n❌ RELATIONSHIP FAILED: {person1} → {person2}")
+                results["detailed_reasoning"].append(f"   Error: {error_msg}")
+                # Include reasoning from failed fuzzy match if available
+                if result.get("reasoning"):
+                    results["detailed_reasoning"].extend([f"   {r}" for r in result.get("reasoning", [])])
+
         return results
     
     def query(self, person_name: str) -> dict:

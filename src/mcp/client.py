@@ -82,3 +82,13 @@ async def call_crm_tool(tool_name: str, args: dict) -> dict:
         return await client.call_tool(tool_name, args)
     finally:
         await client.close()
+
+
+async def call_input_tool(tool_name: str, args: dict) -> dict:
+    """Call Input server tool."""
+    client = MCPClient("src/mcp/input_server.py")
+    try:
+        await client.connect()
+        return await client.call_tool(tool_name, args)
+    finally:
+        await client.close()

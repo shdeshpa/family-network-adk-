@@ -1,6 +1,7 @@
 """Tool definitions for ADK agents - syncs to both databases."""
 
 from typing import Optional
+import requests
 
 from src.graph.person_store import PersonStore
 from src.graph.family_graph import FamilyGraph
@@ -79,30 +80,131 @@ def add_person_to_graph(
 
 
 def add_relationship(person1_name: str, person2_name: str, relationship_type: str) -> dict:
-    """Add a relationship between two people."""
+    """Add a relationship between two people using fuzzy name matching."""
     store, graph, _, _ = _get_stores()
-    
-    p1_matches = store.find_by_name(person1_name)
-    p2_matches = store.find_by_name(person2_name)
-    
-    if not p1_matches:
-        return {"success": False, "error": f"Person not found: {person1_name}"}
-    if not p2_matches:
-        return {"success": False, "error": f"Person not found: {person2_name}"}
-    
-    p1_id = p1_matches[0].id
-    p2_id = p2_matches[0].id
-    
-    if relationship_type == "parent_child":
-        graph.add_parent_child(p1_id, p2_id)
-    elif relationship_type == "spouse":
-        graph.add_spouse(p1_id, p2_id)
-    elif relationship_type == "sibling":
-        graph.add_sibling(p1_id, p2_id)
-    else:
-        return {"success": False, "error": f"Unknown relationship: {relationship_type}"}
-    
-    return {"success": True, "type": relationship_type, "person1_id": p1_id, "person2_id": p2_id}
+
+    # Use fuzzy matching MCP tool for better name resolution
+    try:
+        # Match person 1 using fuzzy matching
+        response1 = requests.post(
+            "http://localhost:8003/tools/fuzzy_match_person",
+            json={"query": person1_name, "similarity_threshold": 0.75},
+            timeout=10
+        )
+        match1_data = response1.json()
+
+        # Match person 2 using fuzzy matching
+        response2 = requests.post(
+            "http://localhost:8003/tools/fuzzy_match_person",
+            json={"query": person2_name, "similarity_threshold": 0.75},
+            timeout=10
+        )
+        match2_data = response2.json()
+
+        # Check if we found matches
+        if not match1_data.get("success") or not match1_data.get("best_match"):
+            reasoning = match1_data.get("reasoning", [])
+            return {
+                "success": False,
+                "error": f"Person not found: {person1_name}",
+                "reasoning": reasoning
+            }
+
+        if not match2_data.get("success") or not match2_data.get("best_match"):
+            reasoning = match2_data.get("reasoning", [])
+            return {
+                "success": False,
+                "error": f"Person not found: {person2_name}",
+                "reasoning": reasoning
+            }
+
+        # Get person IDs from CRM matches (need to look up in PersonStore by name)
+        person1_crm_name = match1_data["best_match"]["full_name"]
+        person2_crm_name = match2_data["best_match"]["full_name"]
+
+        # Look up in PersonStore by exact name match
+        p1_matches = store.find_by_name(person1_crm_name)
+        p2_matches = store.find_by_name(person2_crm_name)
+
+        if not p1_matches:
+            return {
+                "success": False,
+                "error": f"Person '{person1_crm_name}' found in CRM but not in PersonStore (graph database)",
+                "reasoning": match1_data.get("reasoning", [])
+            }
+        if not p2_matches:
+            return {
+                "success": False,
+                "error": f"Person '{person2_crm_name}' found in CRM but not in PersonStore (graph database)",
+                "reasoning": match2_data.get("reasoning", [])
+            }
+
+        # Get exact person IDs
+        p1_id = p1_matches[0].id
+        p2_id = p2_matches[0].id
+
+        # Add relationship to graph
+        if relationship_type == "parent_child":
+            graph.add_parent_child(p1_id, p2_id)
+        elif relationship_type == "spouse":
+            graph.add_spouse(p1_id, p2_id)
+        elif relationship_type == "sibling":
+            graph.add_sibling(p1_id, p2_id)
+        else:
+            return {"success": False, "error": f"Unknown relationship: {relationship_type}"}
+
+        # Build detailed reasoning for UI display
+        reasoning_steps = []
+        reasoning_steps.append(f"🔍 FUZZY MATCHING FOR '{person1_name}' → '{person2_name}' relationship:")
+        reasoning_steps.append(f"\n📌 Person 1: '{person1_name}' (query)")
+        reasoning_steps.extend([f"  • {step}" for step in match1_data.get("reasoning", [])])
+        reasoning_steps.append(f"  ✓ Matched to: '{person1_crm_name}' (confidence: {match1_data['best_match'].get('confidence', 0):.1%})")
+
+        reasoning_steps.append(f"\n📌 Person 2: '{person2_name}' (query)")
+        reasoning_steps.extend([f"  • {step}" for step in match2_data.get("reasoning", [])])
+        reasoning_steps.append(f"  ✓ Matched to: '{person2_crm_name}' (confidence: {match2_data['best_match'].get('confidence', 0):.1%})")
+
+        reasoning_steps.append(f"\n✅ Relationship created: {person1_crm_name} --[{relationship_type}]--> {person2_crm_name}")
+
+        return {
+            "success": True,
+            "type": relationship_type,
+            "person1_id": p1_id,
+            "person2_id": p2_id,
+            "person1_matched": person1_crm_name,
+            "person2_matched": person2_crm_name,
+            "person1_reasoning": match1_data.get("reasoning", []),
+            "person2_reasoning": match2_data.get("reasoning", []),
+            "person1_confidence": match1_data["best_match"].get("confidence"),
+            "person2_confidence": match2_data["best_match"].get("confidence"),
+            "detailed_reasoning": reasoning_steps  # NEW: Formatted reasoning for UI
+        }
+
+    except requests.RequestException as e:
+        # Fallback to old method if MCP server is not available
+        print(f"⚠️  Fuzzy matching MCP server unavailable, using fallback: {e}")
+
+        p1_matches = store.find_by_name(person1_name)
+        p2_matches = store.find_by_name(person2_name)
+
+        if not p1_matches:
+            return {"success": False, "error": f"Person not found: {person1_name}"}
+        if not p2_matches:
+            return {"success": False, "error": f"Person not found: {person2_name}"}
+
+        p1_id = p1_matches[0].id
+        p2_id = p2_matches[0].id
+
+        if relationship_type == "parent_child":
+            graph.add_parent_child(p1_id, p2_id)
+        elif relationship_type == "spouse":
+            graph.add_spouse(p1_id, p2_id)
+        elif relationship_type == "sibling":
+            graph.add_sibling(p1_id, p2_id)
+        else:
+            return {"success": False, "error": f"Unknown relationship: {relationship_type}"}
+
+        return {"success": True, "type": relationship_type, "person1_id": p1_id, "person2_id": p2_id}
 
 
 def get_family_tree(person_name: str) -> dict:
