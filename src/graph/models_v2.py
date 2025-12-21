@@ -5,6 +5,8 @@ Models:
 - Family: Family group with auto-generated code (SHARMA-HYD-001)
 - PersonProfileV2: Extended person profile with family linkage
 - Donation: Donation records linked to persons
+- Temple: Hindu temple/spiritual center information
+- TempleFollower: Many-to-many relationship between temples and persons
 
 These are pure data structures - NO database logic here.
 MCP tools use these for request/response typing.
@@ -147,31 +149,34 @@ class PersonProfileV2:
 
 @dataclass
 class Donation:
-    """Donation record linked to a person."""
-    
+    """Donation record linked to a person (can optionally be linked to a temple)."""
+
     id: Optional[int] = None
     person_id: int = 0
-    
+    temple_id: Optional[int] = None  # Optional temple association
+
     # Donation details
     amount: float = 0.0
     currency: str = "USD"
     cause: str = ""             # e.g., "Temple Construction"
     deity: str = ""             # e.g., "Lord Ganesha"
-    
+
     # Transaction info
     donation_date: str = ""     # ISO date string
     payment_method: str = ""    # cash, check, online, upi
     receipt_number: str = ""
-    
+
     # Meta
     notes: str = ""
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
-    
+    updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
+
     def to_dict(self) -> dict:
         """Convert to dictionary for MCP responses."""
         return {
             "id": self.id,
             "person_id": self.person_id,
+            "temple_id": self.temple_id,
             "amount": self.amount,
             "currency": self.currency,
             "cause": self.cause,
@@ -180,7 +185,123 @@ class Donation:
             "payment_method": self.payment_method,
             "receipt_number": self.receipt_number,
             "notes": self.notes,
-            "created_at": self.created_at
+            "created_at": self.created_at,
+            "updated_at": self.updated_at
+        }
+
+
+@dataclass
+class Temple:
+    """Hindu temple/spiritual center information."""
+
+    id: Optional[int] = None
+    uuid: str = field(default_factory=lambda: str(uuid.uuid4()))
+
+    # Temple Details
+    name: str = ""                  # e.g., "Sri Dattatrya Mandir"
+    deity: str = ""                 # Main deity: "Lord Dattatreya"
+    temple_type: str = ""           # temple, ashram, spiritual_center, pilgrimage_site
+
+    # Location
+    address: str = ""
+    city: str = ""
+    state: str = ""
+    country: str = ""
+    pincode: str = ""
+
+    # Contact
+    phone: str = ""
+    email: str = ""
+    website: str = ""
+
+    # Details
+    established_year: Optional[int] = None
+    description: str = ""            # History, significance
+    facilities: str = ""             # Amenities, services offered
+    timings: str = ""                # Opening hours
+
+    # Meta
+    is_archived: bool = False
+    notes: str = ""
+    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
+
+    def __post_init__(self):
+        if not self.uuid:
+            self.uuid = str(uuid.uuid4())
+
+    @property
+    def full_location(self) -> str:
+        """Return full location string."""
+        parts = [p for p in [self.city, self.state, self.country] if p]
+        return ", ".join(parts)
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for MCP responses."""
+        return {
+            "id": self.id,
+            "uuid": self.uuid,
+            "name": self.name,
+            "deity": self.deity,
+            "temple_type": self.temple_type,
+            "address": self.address,
+            "city": self.city,
+            "state": self.state,
+            "country": self.country,
+            "pincode": self.pincode,
+            "phone": self.phone,
+            "email": self.email,
+            "website": self.website,
+            "established_year": self.established_year,
+            "description": self.description,
+            "facilities": self.facilities,
+            "timings": self.timings,
+            "is_archived": self.is_archived,
+            "notes": self.notes,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "full_location": self.full_location
+        }
+
+
+@dataclass
+class TempleFollower:
+    """Many-to-many relationship between temples and persons."""
+
+    id: Optional[int] = None
+    temple_id: int = 0
+    person_id: int = 0
+
+    # Relationship details
+    relationship_type: str = ""     # devotee, volunteer, priest, trustee, donor, member
+    since_year: Optional[int] = None
+    role: str = ""                  # Specific role/position
+
+    # Activity
+    frequency: str = ""             # daily, weekly, monthly, festivals, occasional
+    activities: str = ""            # Services, contributions
+
+    # Meta
+    notes: str = ""
+    is_active: bool = True
+    created_at: str = field(default_factory=lambda: datetime.now().isoformat())
+    updated_at: str = field(default_factory=lambda: datetime.now().isoformat())
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary for MCP responses."""
+        return {
+            "id": self.id,
+            "temple_id": self.temple_id,
+            "person_id": self.person_id,
+            "relationship_type": self.relationship_type,
+            "since_year": self.since_year,
+            "role": self.role,
+            "frequency": self.frequency,
+            "activities": self.activities,
+            "notes": self.notes,
+            "is_active": self.is_active,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at
         }
 
 
@@ -238,3 +359,54 @@ COMMON_DEITIES = [
     "Lord Venkateshwara",
     "General Temple Fund"
 ]
+
+# Temple-specific constants
+TEMPLE_TYPES = {
+    "": "Not specified",
+    "temple": "Temple",
+    "ashram": "Ashram",
+    "spiritual_center": "Spiritual Center",
+    "pilgrimage_site": "Pilgrimage Site",
+    "monastery": "Monastery",
+    "shrine": "Shrine"
+}
+
+TEMPLE_DEITIES = [
+    "Lord Dattatreya",
+    "Lord Ganesha",
+    "Lord Shiva",
+    "Goddess Lakshmi",
+    "Lord Vishnu",
+    "Goddess Durga",
+    "Lord Hanuman",
+    "Lord Krishna",
+    "Goddess Saraswati",
+    "Lord Venkateshwara",
+    "Lord Rama",
+    "Goddess Parvati",
+    "Lord Murugan",
+    "Goddess Kali",
+    "Lord Ayyappa"
+]
+
+FOLLOWER_RELATIONSHIP_TYPES = {
+    "": "Not specified",
+    "devotee": "Devotee",
+    "volunteer": "Volunteer",
+    "priest": "Priest/Pujari",
+    "trustee": "Trustee/Board Member",
+    "donor": "Donor/Contributor",
+    "member": "Member",
+    "sponsor": "Sponsor",
+    "patron": "Patron"
+}
+
+VISIT_FREQUENCIES = {
+    "": "Not specified",
+    "daily": "Daily",
+    "weekly": "Weekly",
+    "monthly": "Monthly",
+    "festivals": "During Festivals Only",
+    "occasional": "Occasional",
+    "regular": "Regular Visitor"
+}

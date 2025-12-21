@@ -25,6 +25,8 @@ from src.graph.enhanced_crm import EnhancedCRM
 from src.graph.text_history import TextHistory
 from src.graph.family_registry import FamilyRegistry
 from src.graph.crm_store_v2 import CRMStoreV2
+from src.graph.temple_store import TempleStore
+from src.graph.app_settings import AppSettings
 from src.agents.adk.orchestrator import FamilyOrchestrator
 from src.agents.adk.query_agent import QueryAgent
 from src.mcp.input_client import InputMCPClient
@@ -53,6 +55,18 @@ class FamilyNetworkApp:
         # CRM V2 stores
         self.family_registry = FamilyRegistry()
         self.crm_store_v2 = CRMStoreV2()
+        self.temple_store = TempleStore()
+        self.app_settings = AppSettings()
+
+        # Temple context - PRIMARY context for the entire app
+        # Load saved home temple from settings
+        saved_temple_id = self.app_settings.get_home_temple_id()
+        self.selected_temple_id = saved_temple_id
+        self.selected_temple_name = None
+        if saved_temple_id:
+            temple = self.temple_store.get_temple(saved_temple_id)
+            if temple:
+                self.selected_temple_name = temple.name
 
         # Lazy-load these to avoid startup crashes
         self._orchestrator = None
@@ -81,31 +95,139 @@ class FamilyNetworkApp:
         return self._query_agent
     
     def setup(self):
-        """Setup the main UI with tabs."""
-        ui.label("🏠 Family Network System").classes("text-3xl font-bold mb-6")
+        """Setup the main UI."""
+        # Add temple background CSS with faded overlay
+        ui.add_head_html('''
+        <style>
+            body {
+                background-image: url('/static/backgrounds/temple_street.jpg');
+                background-size: cover;
+                background-position: center;
+                background-attachment: fixed;
+                background-repeat: no-repeat;
+            }
 
+            body::before {
+                content: "";
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background-color: rgba(255, 255, 255, 0.85);
+                z-index: -1;
+            }
+
+            .q-page {
+                background-color: transparent !important;
+            }
+        </style>
+        ''')
+
+        # Header with temple info
+        with ui.row().classes("w-full items-center mb-4"):
+            ui.label("🏠 Family Network System").classes("text-3xl font-bold")
+
+            # Temple info display (static text with full description)
+            self.temple_display_container = ui.row().classes("ml-8")
+            self._render_temple_display()
+
+        # Tabs (TEMPLES first, then others)
         with ui.tabs().classes("w-full") as self.tabs:
-            self.record_tab = ui.tab("🎤 Record")
-            self.text_tab = ui.tab("📝 Text Input")
-            self.tree_tab = ui.tab("🌳 Family Tree")
-            self.crm_tab = ui.tab("📇 CRM")
-            self.chat_tab = ui.tab("💬 Chat")
+            self.temples_tab = ui.tab("TEMPLES")
+            self.crm_tab = ui.tab("  Devotee Information")
+            self.tree_tab = ui.tab("  FAMILY TREE")
+            self.chat_tab = ui.tab("  CHAT")
 
-        # Add listener for tab changes
-        self.tabs.on('update:model-value', lambda e: self._on_tab_change(e.args))
-
-        with ui.tab_panels(self.tabs, value=self.record_tab).classes("w-full"):
-            with ui.tab_panel(self.record_tab):
-                self._setup_record_tab()
-            with ui.tab_panel(self.text_tab):
-                self._setup_text_tab()
-            with ui.tab_panel(self.tree_tab):
-                self._setup_tree_tab()
+        # Tab panels
+        with ui.tab_panels(self.tabs, value=self.temples_tab).classes("w-full"):
+            with ui.tab_panel(self.temples_tab):
+                self._setup_temples_tab()
             with ui.tab_panel(self.crm_tab):
                 self._setup_crm_tab()
+            with ui.tab_panel(self.tree_tab):
+                self._setup_tree_tab()
             with ui.tab_panel(self.chat_tab):
                 self._setup_chat_tab()
-    
+
+    def _render_temple_display(self):
+        """Render the static temple display in the header."""
+        self.temple_display_container.clear()
+        with self.temple_display_container:
+            if self.selected_temple_id:
+                # Show full temple info: "Home Temple: Name, City, State"
+                temple = self.temple_store.get_temple(self.selected_temple_id)
+                if temple:
+                    display_text = f"Home Temple: {temple.name}, {temple.city}, {temple.state}"
+                    ui.label(display_text).classes("text-lg text-gray-700 font-medium")
+
+    def _render_temple_selector(self):
+        """Render the temple context selector in the header."""
+        self.temple_context_container.clear()
+        with self.temple_context_container:
+            if self.selected_temple_id:
+                # Show current temple with dropdown
+                temples = self.temple_store.get_all_temples()
+                temple_options = {t.id: f"{t.name} ({t.city})" for t in temples}
+
+                ui.label("Home Temple:").classes("text-sm text-gray-600")
+                ui.select(
+                    options=temple_options,
+                    value=self.selected_temple_id,
+                    on_change=lambda e: self._change_temple(e.value)
+                ).classes("w-64")
+            else:
+                # Show warning and select button
+                ui.label("⚠️ No Home Temple Selected").classes("text-red-600 font-bold")
+                ui.button("Select Temple", on_click=self._show_temple_selector_dialog).classes("bg-orange-600")
+
+    def _change_temple(self, temple_id: int):
+        """Change the selected temple."""
+        temple = self.temple_store.get_temple(temple_id)
+        if temple:
+            self._set_home_temple(temple.id, temple.name)
+
+    def _show_temple_selector_dialog(self):
+        """Show dialog to select a temple as home temple."""
+        with ui.dialog() as dialog, ui.card().classes("w-[600px]"):
+            ui.label("Select Home Temple").classes("text-2xl font-bold mb-4")
+            ui.label("Choose your primary temple context. This will filter data across all screens.").classes("text-sm text-gray-600 mb-4")
+
+            temples = self.temple_store.get_all_temples()
+
+            if not temples:
+                ui.label("No temples found. Please add a temple first.").classes("text-gray-500 italic")
+                ui.button("Go to Temples Tab", on_click=lambda: [dialog.close(), self.tabs.set_value(self.temples_tab)]).classes("bg-orange-600 mt-4")
+            else:
+                # Show temple list
+                for temple in temples:
+                    with ui.card().classes("w-full mb-2 p-3 cursor-pointer hover:bg-gray-100"):
+                        with ui.row().classes("w-full items-center justify-between"):
+                            with ui.column().classes("flex-1"):
+                                ui.label(temple.name).classes("font-bold text-lg")
+                                ui.label(f"{temple.deity} | {temple.city}, {temple.state}").classes("text-sm text-gray-600")
+                            ui.button("Select as Home", on_click=lambda t=temple: self._set_home_temple(t.id, t.name, dialog)).classes("bg-orange-600 text-xs")
+
+            ui.button("Cancel", on_click=dialog.close).classes("bg-gray-500 mt-4")
+
+        dialog.open()
+
+    def _set_home_temple(self, temple_id: int, temple_name: str, dialog=None):
+        """Set the selected temple as home temple context."""
+        self.selected_temple_id = temple_id
+        self.selected_temple_name = temple_name
+
+        # Save to settings for persistence
+        self.app_settings.set_home_temple_id(temple_id)
+
+        # Update the temple display in header
+        self._render_temple_display()
+
+        ui.notify(f"Home temple set to: {temple_name}", type="positive")
+
+        if dialog:
+            dialog.close()
+
     def _setup_record_tab(self):
         ui.label("Speak about your family members.").classes("mb-4 text-gray-600")
         with ui.row().classes("w-full gap-4"):
@@ -294,12 +416,11 @@ class FamilyNetworkApp:
                 ui.label(f"Error rendering tree: {str(e)}").classes("text-red-500")
 
     def _refresh_tree_view(self):
-        """Refresh the tree view by reloading the page."""
-        try:
-            # Reload the page to properly reinitialize the D3 tree
-            ui.run_javascript('window.location.reload();')
-        except Exception as e:
-            ui.notify(f"Error refreshing tree: {str(e)}", type="negative")
+        """Refresh the tree view without resetting context."""
+        # Use page reload to refresh data
+        # Home temple context is now persisted in app_settings.json
+        # so it will be automatically restored on page reload
+        ui.navigate.reload()
 
     def _open_person_in_crm(self, person_id: int):
         """Navigate to CRM tab and open PersonDetailView for editing."""
@@ -463,7 +584,8 @@ class FamilyNetworkApp:
             person_detail = PersonDetailView(
                 person_id=person_id,
                 on_back=self._back_to_crm_table,
-                on_save=self._on_person_saved
+                on_save=self._on_person_saved,
+                temple_id=self.selected_temple_id  # Pass temple context
             )
             person_detail.render()
 
@@ -804,10 +926,469 @@ class FamilyNetworkApp:
         with container:
             ui.label(msg)
 
+    def _setup_temples_tab(self):
+        """Setup Temples tab with table-based view and drill-down navigation."""
+        # Breadcrumb navigation container
+        self.temples_breadcrumb = ui.row().classes("w-full mb-2")
+
+        # Main temples container
+        self.temples_container = ui.column().classes("w-full")
+
+        # Start with list view
+        self.current_temple_id = None
+        self._show_temples_list()
+
+    def _show_temples_list(self):
+        """Show temples list view."""
+        # Update breadcrumb
+        self.temples_breadcrumb.clear()
+        with self.temples_breadcrumb:
+            ui.label("TEMPLES").classes("text-lg font-bold text-orange-600")
+
+        # Update main container
+        self.temples_container.clear()
+        with self.temples_container:
+            ui.label("Hindu Temples & Spiritual Centers").classes("text-2xl font-bold mb-4")
+
+            with ui.row().classes("w-full mb-4 gap-2"):
+                ui.button("+ Add Temple", on_click=lambda: ui.notify("Add temple feature coming soon!")).classes("bg-orange-600")
+                ui.button("🔄 Refresh", on_click=lambda: self._show_temples_list()).classes("bg-gray-600")
+
+            temples = self.temple_store.get_all_temples()
+
+            if not temples:
+                ui.label("No temples found. Click '+ Add Temple' to add your first temple.").classes("text-gray-500 italic")
+                return
+
+            ui.label(f"Total temples: {len(temples)}").classes("text-sm text-gray-600 mb-2")
+
+            with ui.element("table").classes("w-full border-collapse"):
+                with ui.element("thead").classes("bg-gray-100"):
+                    with ui.element("tr"):
+                        with ui.element("th").classes("p-2 text-left border"):
+                            ui.label("Name")
+                        with ui.element("th").classes("p-2 text-left border"):
+                            ui.label("Deity")
+                        with ui.element("th").classes("p-2 text-left border"):
+                            ui.label("City")
+                        with ui.element("th").classes("p-2 text-left border"):
+                            ui.label("State")
+                        with ui.element("th").classes("p-2 text-left border"):
+                            ui.label("Type")
+                        with ui.element("th").classes("p-2 text-left border"):
+                            ui.label("Actions")
+
+                with ui.element("tbody"):
+                    for temple in temples[:20]:
+                        with ui.element("tr").classes("hover:bg-gray-50"):
+                            with ui.element("td").classes("p-2 border"):
+                                ui.label(temple.name)
+                            with ui.element("td").classes("p-2 border"):
+                                ui.label(temple.deity or "-")
+                            with ui.element("td").classes("p-2 border"):
+                                ui.label(temple.city or "-")
+                            with ui.element("td").classes("p-2 border"):
+                                ui.label(temple.state or "-")
+                            with ui.element("td").classes("p-2 border"):
+                                ui.label(temple.temple_type or "-")
+                            with ui.element("td").classes("p-2 border"):
+                                with ui.row().classes("gap-1"):
+                                    ui.button("View", on_click=lambda t=temple: self._show_temple_detail(t.id)).classes("bg-blue-500 text-white text-xs px-2 py-1")
+                                    ui.button("Set as Home", on_click=lambda t=temple: self._set_home_temple(t.id, t.name)).classes("bg-green-600 text-white text-xs px-2 py-1")
+
+    def _show_temple_detail(self, temple_id: int):
+        """Show temple detail view with sub-tabs."""
+        temple = self.temple_store.get_temple(temple_id)
+        if not temple:
+            ui.notify("Temple not found", type="negative")
+            return
+
+        self.current_temple_id = temple_id
+
+        # Update breadcrumb
+        self.temples_breadcrumb.clear()
+        with self.temples_breadcrumb:
+            ui.button("TEMPLES", on_click=lambda: self._show_temples_list()).props("flat color=primary").classes("text-blue-600")
+            ui.label("/").classes("mx-2")
+            ui.label(temple.name).classes("text-lg font-bold text-orange-600")
+
+        # Update main container
+        self.temples_container.clear()
+        with self.temples_container:
+            ui.label(f"{temple.name}").classes("text-2xl font-bold mb-4")
+
+            # Sub-tabs for detail view
+            with ui.tabs().classes("w-full") as detail_tabs:
+                overview_tab = ui.tab("📋 Overview")
+                followers_tab = ui.tab("👥 Followers")
+                donations_tab = ui.tab("💰 Donations")
+                voice_tab = ui.tab("🎤 Voice")
+                text_tab = ui.tab("✏️ Text Input")
+
+            with ui.tab_panels(detail_tabs, value=overview_tab).classes("w-full"):
+                with ui.tab_panel(overview_tab):
+                    self._show_temple_overview(temple)
+
+                with ui.tab_panel(followers_tab):
+                    self._show_temple_followers(temple_id)
+
+                with ui.tab_panel(donations_tab):
+                    self._show_temple_donations(temple_id)
+
+                with ui.tab_panel(voice_tab):
+                    self._setup_record_tab()
+
+                with ui.tab_panel(text_tab):
+                    self._setup_text_tab()
+
+    def _show_temple_overview(self, temple):
+        """Show temple overview information."""
+        with ui.card().classes("w-full p-4"):
+            with ui.row().classes("w-full gap-8"):
+                # Left column
+                with ui.column().classes("flex-1"):
+                    ui.label("Basic Information").classes("text-lg font-bold mb-2")
+                    ui.label(f"Deity: {temple.deity}").classes("mb-1")
+                    ui.label(f"Type: {temple.temple_type}").classes("mb-1")
+                    if temple.established_year:
+                        ui.label(f"Established: {temple.established_year}").classes("mb-1")
+
+                    ui.label("Location").classes("text-lg font-bold mt-4 mb-2")
+                    if temple.address:
+                        ui.label(f"Address: {temple.address}").classes("mb-1")
+                    ui.label(f"City: {temple.city}").classes("mb-1")
+                    ui.label(f"State: {temple.state}").classes("mb-1")
+                    ui.label(f"Country: {temple.country}").classes("mb-1")
+                    if temple.pincode:
+                        ui.label(f"Pincode: {temple.pincode}").classes("mb-1")
+
+                # Right column
+                with ui.column().classes("flex-1"):
+                    ui.label("Contact").classes("text-lg font-bold mb-2")
+                    if temple.phone:
+                        ui.label(f"Phone: {temple.phone}").classes("mb-1")
+                    if temple.email:
+                        ui.label(f"Email: {temple.email}").classes("mb-1")
+                    if temple.website:
+                        ui.label(f"Website: {temple.website}").classes("mb-1")
+
+                    if temple.timings:
+                        ui.label("Timings").classes("text-lg font-bold mt-4 mb-2")
+                        ui.label(temple.timings).classes("mb-1")
+
+            if temple.description:
+                ui.label("Description").classes("text-lg font-bold mt-4 mb-2")
+                ui.label(temple.description).classes("text-gray-700")
+
+            if temple.facilities:
+                ui.label("Facilities").classes("text-lg font-bold mt-4 mb-2")
+                ui.label(temple.facilities).classes("text-gray-700")
+
+    def _show_temple_followers(self, temple_id: int):
+        """Show temple followers in tabular format."""
+        followers = self.temple_store.get_temple_followers(temple_id)
+
+        ui.label(f"Total Followers: {len(followers)}").classes("text-sm text-gray-600 mb-2")
+
+        ui.button("+ Add Follower", on_click=lambda: ui.notify("Add follower feature coming soon!")).classes("bg-green-600 mb-4")
+
+        if not followers:
+            ui.label("No followers yet.").classes("text-gray-500 italic")
+            return
+
+        with ui.element("table").classes("w-full border-collapse"):
+            with ui.element("thead").classes("bg-gray-100"):
+                with ui.element("tr"):
+                    with ui.element("th").classes("p-2 text-left border"):
+                        ui.label("Name")
+                    with ui.element("th").classes("p-2 text-left border"):
+                        ui.label("Relationship")
+                    with ui.element("th").classes("p-2 text-left border"):
+                        ui.label("Since Year")
+                    with ui.element("th").classes("p-2 text-left border"):
+                        ui.label("Frequency")
+                    with ui.element("th").classes("p-2 text-left border"):
+                        ui.label("Role")
+
+            with ui.element("tbody"):
+                for follower in followers[:15]:
+                    with ui.element("tr").classes("hover:bg-gray-50"):
+                        with ui.element("td").classes("p-2 border"):
+                            ui.label(follower.get("person_name", "-"))
+                        with ui.element("td").classes("p-2 border"):
+                            ui.label(follower.get("relationship_type", "-"))
+                        with ui.element("td").classes("p-2 border"):
+                            ui.label(str(follower.get("since_year", "-")))
+                        with ui.element("td").classes("p-2 border"):
+                            ui.label(follower.get("frequency", "-"))
+                        with ui.element("td").classes("p-2 border"):
+                            ui.label(follower.get("role", "-"))
+
+    def _show_temple_donations(self, temple_id: int):
+        """Show temple donations in tabular format with search."""
+        ui.label("Donations & Receipts").classes("text-xl font-bold mb-4")
+
+        with ui.row().classes("w-full mb-4 gap-2"):
+            search_input = ui.input("Search by name, phone, email...").classes("flex-1")
+            ui.button("🔍 Search", on_click=lambda: ui.notify("Search feature coming soon!")).classes("bg-blue-600")
+            ui.button("+ Create Receipt", on_click=lambda: self._show_create_receipt_dialog(temple_id)).classes("bg-green-600")
+
+        donations_data = self.temple_store.get_temple_donations(temple_id)
+        donations_list = donations_data.get("donations", []) if isinstance(donations_data, dict) else []
+
+        ui.label(f"Total Donations: {len(donations_list)}").classes("text-sm text-gray-600 mb-2")
+
+        if not donations_list:
+            ui.label("No donations recorded yet.").classes("text-gray-500 italic")
+            return
+
+        with ui.element("table").classes("w-full border-collapse"):
+            with ui.element("thead").classes("bg-gray-100"):
+                with ui.element("tr"):
+                    with ui.element("th").classes("p-2 text-left border"):
+                        ui.label("Devotee")
+                    with ui.element("th").classes("p-2 text-left border"):
+                        ui.label("Amount")
+                    with ui.element("th").classes("p-2 text-left border"):
+                        ui.label("Date")
+                    with ui.element("th").classes("p-2 text-left border"):
+                        ui.label("Cause")
+                    with ui.element("th").classes("p-2 text-left border"):
+                        ui.label("Payment")
+                    with ui.element("th").classes("p-2 text-left border"):
+                        ui.label("Receipt #")
+
+            with ui.element("tbody"):
+                for donation in donations_list[:15]:
+                    with ui.element("tr").classes("hover:bg-gray-50"):
+                        with ui.element("td").classes("p-2 border"):
+                            ui.label(donation.get("person_name", "-"))
+                        with ui.element("td").classes("p-2 border"):
+                            ui.label(f"{donation.get('currency', 'USD')} {donation.get('amount', 0):.2f}")
+                        with ui.element("td").classes("p-2 border"):
+                            ui.label(donation.get("donation_date", "-"))
+                        with ui.element("td").classes("p-2 border"):
+                            ui.label(donation.get("cause", "-"))
+                        with ui.element("td").classes("p-2 border"):
+                            ui.label(donation.get("payment_method", "-"))
+                        with ui.element("td").classes("p-2 border"):
+                            ui.label(donation.get("receipt_number", "-"))
+
+
+    def _show_create_receipt_dialog(self, temple_id: int):
+        """Show dialog to create a donation receipt."""
+        from src.graph.models_v2 import Donation, PAYMENT_METHODS, COMMON_CAUSES, COMMON_DEITIES
+        from datetime import datetime
+
+        with ui.dialog() as dialog, ui.card().classes("w-[800px]"):
+            ui.label("Create Donation Receipt").classes("text-2xl font-bold mb-4")
+
+            # Devotee selection section
+            ui.label("1. Select Devotee").classes("text-lg font-bold mb-2")
+            devotee_container = ui.column().classes("w-full mb-4")
+
+            selected_person_id = {"value": None}
+            selected_person_name = {"value": None}
+
+            def refresh_devotee_selection():
+                devotee_container.clear()
+                with devotee_container:
+                    if selected_person_id["value"]:
+                        ui.label(f"✓ Selected: {selected_person_name['value']}").classes("text-green-600 font-bold mb-2")
+                        ui.button("Change Devotee", on_click=lambda: show_devotee_picker()).classes("bg-blue-500")
+                    else:
+                        with ui.row().classes("w-full gap-4 items-center"):
+                            ui.button("Select Existing Devotee", on_click=lambda: show_devotee_picker()).classes("bg-blue-600")
+                            ui.label("OR").classes("text-gray-500 font-bold")
+                            ui.button("Create New Devotee", on_click=lambda: show_new_devotee_form()).classes("bg-green-600")
+
+            def show_devotee_picker():
+                """Show dialog to pick from existing persons."""
+                with ui.dialog() as picker_dialog, ui.card().classes("w-[600px]"):
+                    ui.label("Select Devotee").classes("text-xl font-bold mb-4")
+
+                    # Search input
+                    search_input = ui.input("Search by name, phone, email...").classes("w-full mb-4")
+
+                    # Results container
+                    results_container = ui.column().classes("w-full max-h-96 overflow-y-auto")
+
+                    def search_persons():
+                        results_container.clear()
+                        search_term = search_input.value.lower() if search_input.value else ""
+
+                        persons = self.crm_store_v2.get_all()
+
+                        if search_term:
+                            persons = [p for p in persons if (
+                                search_term in p.full_name.lower() or
+                                search_term in p.phone.lower() or
+                                search_term in p.email.lower()
+                            )]
+
+                        with results_container:
+                            if not persons:
+                                ui.label("No devotees found.").classes("text-gray-500 italic")
+                            else:
+                                for person in persons[:20]:
+                                    with ui.card().classes("w-full mb-2 p-3 cursor-pointer hover:bg-gray-100"):
+                                        with ui.row().classes("w-full items-center"):
+                                            with ui.column().classes("flex-1"):
+                                                ui.label(person.full_name).classes("font-bold")
+                                                if person.phone or person.email:
+                                                    ui.label(f"{person.phone} | {person.email}").classes("text-sm text-gray-600")
+                                                if person.family_code:
+                                                    ui.label(f"Family: {person.family_code}").classes("text-xs text-blue-600")
+                                            ui.button("Select", on_click=lambda p=person: select_person(p)).classes("bg-green-600 text-xs")
+
+                    def select_person(person):
+                        selected_person_id["value"] = person.id
+                        selected_person_name["value"] = person.full_name
+                        picker_dialog.close()
+                        refresh_devotee_selection()
+
+                    search_input.on("input", search_persons)
+                    search_persons()  # Initial load
+
+                    ui.button("Cancel", on_click=picker_dialog.close).classes("bg-gray-500 mt-4")
+
+                picker_dialog.open()
+
+            def show_new_devotee_form():
+                """Show dialog to create new person."""
+                with ui.dialog() as new_person_dialog, ui.card().classes("w-[600px]"):
+                    ui.label("Create New Devotee").classes("text-xl font-bold mb-4")
+
+                    # Basic fields
+                    first_name_input = ui.input("First Name *").classes("w-full mb-2")
+                    last_name_input = ui.input("Last Name").classes("w-full mb-2")
+                    phone_input = ui.input("Phone").classes("w-full mb-2")
+                    email_input = ui.input("Email").classes("w-full mb-2")
+                    city_input = ui.input("City").classes("w-full mb-2")
+
+                    # Family selection
+                    ui.label("Family (Optional)").classes("font-bold mb-2")
+                    family_select = ui.select(
+                        options={0: "No Family"} | {f.id: f"{f.code} - {f.surname}" for f in self.family_registry.get_all()},
+                        value=0
+                    ).classes("w-full mb-4")
+
+                    def create_person():
+                        if not first_name_input.value:
+                            ui.notify("First name is required!", type="negative")
+                            return
+
+                        from src.graph.models_v2 import PersonProfileV2
+
+                        family_id = family_select.value if family_select.value != 0 else None
+                        family_obj = self.family_registry.get_by_id(family_id) if family_id else None
+
+                        person = PersonProfileV2(
+                            first_name=first_name_input.value,
+                            last_name=last_name_input.value,
+                            phone=phone_input.value,
+                            email=email_input.value,
+                            city=city_input.value,
+                            family_id=family_id,
+                            family_uuid=family_obj.uuid if family_obj else "",
+                            family_code=family_obj.code if family_obj else ""
+                        )
+
+                        person_id = self.crm_store_v2.add_person(person)
+                        selected_person_id["value"] = person_id
+                        selected_person_name["value"] = person.full_name
+
+                        ui.notify(f"Created devotee: {person.full_name}", type="positive")
+                        new_person_dialog.close()
+                        refresh_devotee_selection()
+
+                    ui.button("Create Devotee", on_click=create_person).classes("bg-green-600 mt-4")
+                    ui.button("Cancel", on_click=new_person_dialog.close).classes("bg-gray-500 mt-2")
+
+                new_person_dialog.open()
+
+            refresh_devotee_selection()
+
+            ui.separator().classes("my-4")
+
+            # Donation details
+            ui.label("2. Donation Details").classes("text-lg font-bold mb-2")
+
+            with ui.row().classes("w-full gap-4"):
+                amount_input = ui.number("Amount *", value=0.0, format="%.2f", min=0).classes("flex-1")
+                currency_select = ui.select(
+                    options={"USD": "US Dollar ($)", "INR": "Indian Rupee (₹)"},
+                    value="USD",
+                    label="Currency"
+                ).classes("flex-1")
+
+            donation_date_input = ui.input("Donation Date (YYYY-MM-DD)", value=datetime.now().strftime("%Y-%m-%d")).classes("w-full mb-2")
+
+            cause_input = ui.select(
+                options={c: c for c in COMMON_CAUSES},
+                label="Cause",
+                value=COMMON_CAUSES[0] if COMMON_CAUSES else ""
+            ).classes("w-full mb-2")
+
+            deity_input = ui.select(
+                options={d: d for d in COMMON_DEITIES},
+                label="Deity",
+                value=COMMON_DEITIES[0] if COMMON_DEITIES else ""
+            ).classes("w-full mb-2")
+
+            payment_method_select = ui.select(
+                options=PAYMENT_METHODS,
+                label="Payment Method",
+                value=""
+            ).classes("w-full mb-2")
+
+            notes_input = ui.textarea("Notes (Optional)").classes("w-full mb-4")
+
+            ui.separator().classes("my-4")
+
+            # Action buttons
+            def save_donation():
+                if not selected_person_id["value"]:
+                    ui.notify("Please select a devotee!", type="negative")
+                    return
+
+                if not amount_input.value or amount_input.value <= 0:
+                    ui.notify("Please enter a valid donation amount!", type="negative")
+                    return
+
+                donation = Donation(
+                    person_id=selected_person_id["value"],
+                    temple_id=temple_id,
+                    amount=amount_input.value,
+                    currency=currency_select.value,
+                    donation_date=donation_date_input.value,
+                    cause=cause_input.value,
+                    deity=deity_input.value,
+                    payment_method=payment_method_select.value,
+                    notes=notes_input.value
+                )
+
+                donation_id = self.temple_store.add_donation(donation)
+                ui.notify(f"Donation receipt created successfully! (ID: {donation_id})", type="positive")
+                dialog.close()
+                # Refresh the donations view
+                self._show_temple_detail(temple_id)
+
+            with ui.row().classes("w-full gap-2"):
+                ui.button("Save Receipt", on_click=save_donation).classes("bg-green-600 flex-1")
+                ui.button("Cancel", on_click=dialog.close).classes("bg-gray-500 flex-1")
+
+        dialog.open()
+
 
 def run_app():
-    app = FamilyNetworkApp()
-    app.setup()
+    # Add static files support
+    from pathlib import Path
+    from nicegui import app
+    app.add_static_files('/static', str(Path(__file__).parent.parent.parent / 'static'))
+
+    app_instance = FamilyNetworkApp()
+    app_instance.setup()
     ui.run(title="Family Network", port=8080, reload=False)
 
 

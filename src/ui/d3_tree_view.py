@@ -10,6 +10,7 @@ from src.graph.crm_store_v2 import CRMStoreV2
 from src.graph.family_registry import FamilyRegistry
 from src.graph.person_store import PersonStore
 from src.graph.family_graph import FamilyGraph
+from src.graph.temple_store import TempleStore
 from src.ui.audio_recorder import AudioRecorderUI
 from src.mcp.input_client import InputMCPClient
 
@@ -32,6 +33,8 @@ class D3TreeView:
         # GraphLite for relationships
         self.person_store = person_store or PersonStore()
         self.family_graph = family_graph or FamilyGraph()
+        # Temple store for temple data
+        self.temple_store = TempleStore()
         self.on_node_click = on_node_click
         self.on_view_in_crm = on_view_in_crm
         self.person_dialog = None
@@ -75,9 +78,7 @@ class D3TreeView:
                 # Toolbar
                 with ui.row().classes("w-full justify-between items-center mb-2"):
                     ui.label("🌳 Family Tree (D3.js)").classes("text-lg font-bold")
-                    with ui.row().classes("gap-2"):
-                        ui.html('<button onclick="if(window.resetD3View) window.resetD3View()" class="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--rectangle q-btn-padding text-primary q-btn--dense" style="font-size: 0.875rem;">🔍 Reset View</button>', sanitize=False)
-                        ui.button("🔄 Refresh Data", on_click=lambda: ui.navigate.reload()).props("dense flat size=sm")
+                    ui.html('<button onclick="if(window.resetD3View) window.resetD3View()" class="q-btn q-btn-item non-selectable no-outline q-btn--flat q-btn--rectangle q-btn-padding text-primary q-btn--dense" style="font-size: 0.875rem;">🔍 Reset View</button>', sanitize=False)
 
                 # Filters
                 if cities or states:
@@ -556,8 +557,63 @@ class D3TreeView:
 
                 # Donations Tab
                 with ui.tab_panel(donations_tab):
-                    ui.label("Donation tracking coming soon...").classes("text-gray-500 p-4")
-                    # Placeholder for future donation functionality
+                    # Get donations for this person
+                    donations = self.crm_store.get_donations_for_person(person_id)
+
+                    if not donations:
+                        ui.label("No donations recorded yet").classes("text-gray-500 p-4")
+                    else:
+                        # Summary stats - group by currency
+                        from collections import defaultdict
+                        currency_totals = defaultdict(float)
+                        for d in donations:
+                            currency_totals[d.currency] += d.amount
+                        total_count = len(donations)
+
+                        with ui.row().classes("gap-4 mb-4"):
+                            with ui.card().classes("p-4"):
+                                ui.label("Total Donations").classes("text-sm text-gray-600")
+                                ui.label(f"{total_count}").classes("text-2xl font-bold text-blue-600")
+                            with ui.card().classes("p-4"):
+                                ui.label("Total Amount").classes("text-sm text-gray-600")
+                                # Show amounts grouped by currency
+                                for currency, amount in sorted(currency_totals.items()):
+                                    currency_symbol = {"USD": "$", "INR": "₹", "EUR": "€", "GBP": "£"}.get(currency, currency + " ")
+                                    ui.label(f"{currency_symbol}{amount:,.2f}").classes("text-2xl font-bold text-green-600")
+
+                        # Build table data
+                        donation_rows = []
+                        for d in donations:
+                            # Get temple name if temple_id exists
+                            temple_name = ""
+                            if d.temple_id:
+                                temple = self.temple_store.get_temple(d.temple_id)
+                                if temple:
+                                    temple_name = temple.name
+
+                            donation_rows.append({
+                                'date': d.donation_date or 'N/A',
+                                'temple': temple_name or 'General',
+                                'amount': f"{d.currency} {d.amount:,.2f}",
+                                'cause': d.cause or '-',
+                                'deity': d.deity or '-',
+                                'receipt': d.receipt_number or '-',
+                                'method': d.payment_method or '-'
+                            })
+
+                        # Create table
+                        ui.table(
+                            columns=[
+                                {'name': 'date', 'label': 'Date', 'field': 'date', 'align': 'left', 'sortable': True},
+                                {'name': 'temple', 'label': 'Temple', 'field': 'temple', 'align': 'left', 'sortable': True},
+                                {'name': 'amount', 'label': 'Amount', 'field': 'amount', 'align': 'right', 'sortable': True},
+                                {'name': 'cause', 'label': 'Cause', 'field': 'cause', 'align': 'left'},
+                                {'name': 'deity', 'label': 'Deity', 'field': 'deity', 'align': 'left'},
+                                {'name': 'receipt', 'label': 'Receipt #', 'field': 'receipt', 'align': 'left'},
+                                {'name': 'method', 'label': 'Method', 'field': 'method', 'align': 'left'}
+                            ],
+                            rows=donation_rows
+                        ).classes("w-full")
 
             # Action buttons at bottom
             ui.separator().classes("mt-4")
